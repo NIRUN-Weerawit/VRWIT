@@ -9,12 +9,72 @@ import cv2
 from time import time
 from torch.utils.data import TensorDataset, DataLoader
 import torchvision.transforms as transforms
+import torchvision.transforms.functional as tvf
 
 import IPython
 e = IPython.embed
 
 def flatten_list(l):
     return [item for sublist in l for item in sublist]
+
+def pack_sequence_dim(x):
+    ''' Pack the batch and seqence_length dimension.'''
+    if isinstance(x, torch.Tensor):
+        b, s = x.shape[:2]
+        return x.view(b * s, *x.shape[2:])
+
+    if isinstance(x, list):
+        return [pack_sequence_dim(elt) for elt in x]
+
+    output = {}
+    for key, value in x.items():
+        output[key] = pack_sequence_dim(value)
+    return output
+
+
+def unpack_sequence_dim(x, b, s):
+    ''' Unpack the batch and seqence_length dimension.'''
+    if isinstance(x, torch.Tensor):
+        return x.view(b, s, *x.shape[1:])
+
+    if isinstance(x, list):
+        return [unpack_sequence_dim(elt, b, s) for elt in x]
+
+    output = {}
+    for key, value in x.items():
+        output[key] = unpack_sequence_dim(value, b, s)
+    return output
+
+
+def stack_list_of_dict_tensor(output, dim=1):
+    ''' Stack list of dict of tensors'''
+    new_output = {}
+    for outter_key, outter_value in output.items():
+        if len(outter_value) > 0:
+            new_output[outter_key] = {}
+            for inner_key in outter_value[0].keys():
+                new_output[outter_key][inner_key] = torch.stack(
+                    [x[inner_key] for x in outter_value], dim=dim)
+    return new_output
+
+def interpolate_resize(x, size, mode=tvf.InterpolationMode.NEAREST):
+    '''Resize the tensor with interpolation
+    '''
+    x = tvf.resize(x, size, interpolation=mode, antialias=True)
+    return x
+
+def compose_rgb_labels(self, batch):
+        batch['rgb_label_1'] = batch
+        h, w = batch['rgb_label_1'].shape[-2:]
+        for downsample_factor in [2, 4]:
+            size = h // downsample_factor, w // downsample_factor
+            previous_label_factor = downsample_factor // 2
+            batch[f'rgb_label_{downsample_factor}'] = interpolate_resize(
+                batch[f'rgb_label_{previous_label_factor}'],
+                size,
+                mode=tvf.InterpolationMode.BILINEAR,
+            )
+        return batch
 
 class EpisodicDataset(torch.utils.data.Dataset):
     def __init__(self, dataset_path_list, camera_names, norm_stats, episode_ids, episode_len, chunk_size, policy_class):
@@ -421,3 +481,4 @@ def set_seed(seed):
     torch.manual_seed(seed)
     np.random.seed(seed)
     random.seed(seed)
+

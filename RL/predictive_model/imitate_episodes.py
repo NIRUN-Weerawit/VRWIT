@@ -242,7 +242,9 @@ def get_image(ts, camera_names, stats, rand_crop_resize):
 
     return curr_image
 
-
+def loss_reducing(loss: torch.Tensor):
+        total_loss = sum([x for x in loss.values()])
+        return total_loss
 
 def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=3):
     set_seed(1000)
@@ -552,7 +554,7 @@ def train_bc(train_dataloader, val_dataloader, config):
         data = next(train_dataloader)
         forward_dict = forward_pass(data, policy)
         # backward
-        loss = forward_dict['loss']
+        loss = loss_reducing(forward_dict)
         loss.backward()
         optimizer.step()
         wandb.log(forward_dict, step=step) # not great, make training 1-2% slower

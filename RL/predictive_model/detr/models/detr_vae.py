@@ -45,7 +45,10 @@ class DETRVAE(nn.Module):
             aux_loss: True if auxiliary decoding losses (loss at each decoder layer) are to be used.
         """
         super().__init__()
-        self.num_queries = num_queries
+        self.num_action_queries = num_queries
+        self.num_image_queries  = 1
+        self.action_queries = slice(0, self.num_action_queries)
+        self.image_queries = slice(self.num_action_queries, self.num_action_queries + self.num_image_queries)
         self.camera_names = camera_names
         self.transformer = transformer
         self.encoder = encoder
@@ -54,7 +57,7 @@ class DETRVAE(nn.Module):
         hidden_dim = transformer.d_model
         self.action_head = nn.Linear(hidden_dim, action_dim)
         self.is_pad_head = nn.Linear(hidden_dim, 1)
-        self.query_embed = nn.Embedding(num_queries, hidden_dim)
+        self.query_embed = nn.Embedding(self.num_action_queries + self.num_image_queries, hidden_dim)
         if backbones is not None:
             self.input_proj = nn.Conv2d(backbones[0].num_channels, hidden_dim, kernel_size=1)
             # print(f"backbone body = {backbones[0].body}")
@@ -177,9 +180,14 @@ class DETRVAE(nn.Module):
             env_state = self.input_proj_env_state(env_state)
             transformer_input = torch.cat([qpos, env_state], axis=1) # seq length = 2
             hs = self.transformer(transformer_input, None, self.query_embed.weight, self.pos.weight)[0]
-        a_hat = self.action_head(hs)
-        is_pad_hat = self.is_pad_head(hs)
-        return a_hat, is_pad_hat, [mu, logvar], probs, binaries
+        
+        hs_action =  hs[:, self.action_queries, :]
+        hs_image = hs[:, self.image_queries, :]
+        
+        a_hat = self.action_head(hs_action)
+        is_pad_hat = self.is_pad_head(hs_action)
+        # gen_img = self.image_head(hs_image)
+        return a_hat, hs_image, is_pad_hat, [mu, logvar], probs, binaries, latent_input
 
 
 
