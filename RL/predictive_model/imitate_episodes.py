@@ -1,5 +1,5 @@
 import random
-from piper_cube_env import Gym_env, Replay_env
+from piper_cube_env import Replay_env #Gym_env
 
 import torch
 import numpy as np
@@ -24,6 +24,7 @@ from policy import ACTPolicy, CNNMLPPolicy, DiffusionPolicy
 # from visualize_episodes import save_videos
 
 from detr.models.latent_model import Latent_Model_Transformer
+import gin
 
 
 
@@ -312,7 +313,7 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=3):
         ### set task
         print(f"rllout_id : {rollout_id}")
         # gym_instance.reset()
-        dataset_dir     = f"model_datasets/seed_28/episode_{random.randint(0, 99)}.hdf5"
+        dataset_dir     = f"/mnt/bigdata/00_students/wee_ucl/seed_28/episode_{random.randint(0, 99)}.hdf5"
         video_instance = Replay_env(dataset_dir)
         max_timesteps = video_instance.ep_len
         ### evaluation loop
@@ -518,6 +519,7 @@ def train_bc(train_dataloader, val_dataloader, config):
                 validation_dicts = []
                 for batch_idx, data in enumerate(val_dataloader):
                     forward_dict = forward_pass(data, policy)
+                    forward_dict['loss'] = loss_reducing(forward_dict)
                     validation_dicts.append(forward_dict)
                     if batch_idx > 50:
                         break
@@ -615,6 +617,9 @@ if __name__ == '__main__':
     parser.add_argument('--vq_class',           action='store', type=int,   help='vq_class')
     parser.add_argument('--vq_dim',             action='store', type=int,   help='vq_dim')
     parser.add_argument('--no_encoder',         action='store_true')
+    
+    gin.parse_config_file("configs/base_train_config.gin", skip_unknown=True)
+    
     
     main(vars(parser.parse_args()))
     

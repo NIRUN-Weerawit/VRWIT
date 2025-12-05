@@ -17,6 +17,10 @@ e = IPython.embed
 def flatten_list(l):
     return [item for sublist in l for item in sublist]
 
+def loss_reducing(loss: torch.Tensor):
+    total_loss = sum([x for x in loss.values()])
+    return total_loss
+    
 def pack_sequence_dim(x):
     ''' Pack the batch and seqence_length dimension.'''
     if isinstance(x, torch.Tensor):
@@ -57,24 +61,146 @@ def stack_list_of_dict_tensor(output, dim=1):
                     [x[inner_key] for x in outter_value], dim=dim)
     return new_output
 
+def _interpolate_resize(x, size, mode=tvf.InterpolationMode.NEAREST):
+    '''Resize the tensor with interpolation
+    
+    Args:
+        x: Tensor of shape [N, C, H, W] or [C, H, W]
+        size: Tuple (height, width) for output size
+        mode: Interpolation mode
+    '''
+    import torch.nn.functional as F
+    
+    original_shape = x.shape
+    
+    # Ensure 4D tensor [N, C, H, W]
+    if x.ndim == 3:
+        # [C, H, W] -> [1, C, H, W]
+        x = x.unsqueeze(0)
+        needs_squeeze = True
+    elif x.ndim == 4:
+        needs_squeeze = False
+    else:
+        raise ValueError(f"Expected 3D or 4D tensor, got {x.ndim}D with shape {original_shape}")
+    
+    # Use torch.nn.functional.interpolate instead of tvf.resize
+    # This is more reliable and gives us better control
+    mode_map = {
+        tvf.InterpolationMode.NEAREST: 'nearest',
+        tvf.InterpolationMode.BILINEAR: 'bilinear',
+        tvf.InterpolationMode.BICUBIC: 'bicubic',
+    }
+    
+    interp_mode = mode_map.get(mode, 'bilinear')
+    align_corners = None if interp_mode == 'nearest' else False
+    
+    x = F.interpolate(
+        x, 
+        size=size,  # (H, W)
+        mode=interp_mode,
+        align_corners=align_corners,
+        antialias=True if interp_mode != 'nearest' else False
+    )
+    
+    # Remove batch dimension if we added it
+    if needs_squeeze:
+        x = x.squeeze(0)  # [1, C, H, W] -> [C, H, W]
+    
+    return x
+
 def interpolate_resize(x, size, mode=tvf.InterpolationMode.NEAREST):
     '''Resize the tensor with interpolation
     '''
+    # x = tvf.resize(x, size, interpolation=mode, antialias=True)
+    # x.unsqueeze(1)
+    was_5d = x.ndim == 5
+    if was_5d:
+        b, s, c, h, w = x.shape
+        x = x.reshape(b * s, c, h, w)
     x = tvf.resize(x, size, interpolation=mode, antialias=True)
+    if was_5d:
+        x = x.reshape(b, s, c, *x.shape[-2:])
     return x
 
-def compose_rgb_labels(self, batch):
-        batch['rgb_label_1'] = batch
-        h, w = batch['rgb_label_1'].shape[-2:]
-        for downsample_factor in [2, 4]:
-            size = h // downsample_factor, w // downsample_factor
-            previous_label_factor = downsample_factor // 2
-            batch[f'rgb_label_{downsample_factor}'] = interpolate_resize(
-                batch[f'rgb_label_{previous_label_factor}'],
-                size,
-                mode=tvf.InterpolationMode.BILINEAR,
-            )
-        return batch
+
+def compose_rgb_labels(batch):
+    '''Compose RGB labels at different downsampling factors
+    
+    Args:
+        batch: Either a dict with 'rgb_label_1' or a tensor
+    
+    Returns:
+        dict: Dictionary with rgb labels at different scales
+    '''
+    # 1. Get the image tensor from batch
+    if isinstance(batch, dict):
+        if 'rgb_label_1' in batch:
+            img = batch['rgb_label_1']
+        elif 'rgb' in batch:
+            img = batch['rgb']
+        else:
+            img = next(iter(batch.values()))
+    else:
+        img = batch
+
+    # 2. If there is a camera dimension, select ONE camera
+    #    img shape: [B, num_cams, C, H, W]
+    # if img.ndim == 5:
+    #     # pick camera cam_idx
+    #     img = img[:, 0]      # -> [B, C, H, W]
+    img = img[:, 0, :3]  # drop depth
+    img = img.unsqueeze(1)
+    # 3. Build pyramid of downsampled labels
+    output = {}
+    # print("img shape: ", img.shape)
+    output['rgb_label_1'] = img
+    h, w = img.shape[-2:]
+    
+    # Create downsampled versions
+    for downsample_factor in [2, 4]:
+        size = (h // downsample_factor, w // downsample_factor)
+        previous_label_factor = downsample_factor // 2
+        
+        output[f'rgb_label_{downsample_factor}'] = interpolate_resize(
+            output[f'rgb_label_{previous_label_factor}'],
+            size,
+            mode=tvf.InterpolationMode.BILINEAR,
+        )
+    # print("*****************batch rgb_label_1 shape: ", output['rgb_label_1'].shape)
+    # print("*****************batch rgb_label_2 shape: ", output['rgb_label_2'].shape)
+    # print("*****************batch rgb_label_4 shape: ", output['rgb_label_4'].shape)
+    return output
+
+def _compose_rgb_labels(batch):
+    '''Compose RGB labels at different downsampling factors
+    
+    Args:
+        batch: Either a dict with 'rgb_label_1' or a tensor
+    
+    Returns:
+        dict: Dictionary with rgb labels at different scales
+    '''
+    # Handle case where batch is just a tensor
+    if isinstance(batch, torch.Tensor):
+        output = {}
+        output['rgb_label_1'] = batch
+        h, w = batch.shape[-2:]
+    else:
+        output = batch.copy() if isinstance(batch, dict) else {'rgb_label_1': batch}
+        h, w = output['rgb_label_1'].shape[-2:]
+    
+    # Create downsampled versions
+    for downsample_factor in [2, 4]:
+        size = (h // downsample_factor, w // downsample_factor)
+        previous_label_factor = downsample_factor // 2
+        
+        output[f'rgb_label_{downsample_factor}'] = interpolate_resize(
+            output[f'rgb_label_{previous_label_factor}'],
+            size,
+            mode=tvf.InterpolationMode.BILINEAR,
+        )
+    
+    return output
 
 class EpisodicDataset(torch.utils.data.Dataset):
     def __init__(self, dataset_path_list, camera_names, norm_stats, episode_ids, episode_len, chunk_size, policy_class):
@@ -461,7 +587,7 @@ def sample_insertion_pose():
 
 ### helper functions
 
-def compute_dict_mean(epoch_dicts):
+def _compute_dict_mean(epoch_dicts):
     result = {k: None for k in epoch_dicts[0]}
     num_items = len(epoch_dicts)
     for k in result:
@@ -469,6 +595,20 @@ def compute_dict_mean(epoch_dicts):
         for epoch_dict in epoch_dicts:
             value_sum += epoch_dict[k]
         result[k] = value_sum / num_items
+    return result
+
+def compute_dict_mean(epoch_dicts):
+    if not epoch_dicts:
+        return {}
+    keys = epoch_dicts[0].keys()
+    result = {}
+    for k in keys:
+        vals = [d[k] for d in epoch_dicts]
+        if isinstance(vals[0], torch.Tensor):
+            stacked = torch.stack(vals, dim=0)
+            result[k] = stacked.mean(dim=0)
+        else:
+            result[k] = sum(vals) / len(vals)
     return result
 
 def detach_dict(d):

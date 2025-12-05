@@ -5,7 +5,7 @@ import torch
 import numpy as np
 from detr.main import build_ACT_model_and_optimizer, build_CNNMLP_model_and_optimizer
 from losses import XMobilityLoss
-from utils import pack_sequence_dim, unpack_sequence_dim, compose_rgb_labels
+from utils import pack_sequence_dim, unpack_sequence_dim, compose_rgb_labels, loss_reducing
 from decoders import StyleGanDecoder, SegmentationHead, RgbHead
 import IPython
 e = IPython.embed
@@ -23,13 +23,16 @@ from collections import OrderedDict
 class ACTPolicy(nn.Module):
     def __init__(self, args_override):
         super().__init__()
-        model, optimizer    = build_ACT_model_and_optimizer(args_override)
+        model, _optimizer    = build_ACT_model_and_optimizer(args_override)
         self.action_model   = model # CVAE decoder
-        self.optimizer      = optimizer
+        # self.optimizer      = optimizer
         self.kl_weight      = args_override['kl_weight']
         self.vq             = args_override['vq']
         self.losses         = XMobilityLoss()
         self.hidden_dim      = args_override['hidden_dim']
+        self.enable_semantic = False
+        self.enable_rgb_stylegan = True
+        self.enable_rgb_diffusion = False
         # state_dim           = self.state_dim
         # Semantic segmentation
         if self.enable_semantic:
@@ -43,6 +46,16 @@ class ACTPolicy(nn.Module):
         if self.enable_rgb_diffusion:
             self.rgb_diffuser = RGBDiffuser(latent_state_dim=state_dim)"""
         
+        params = list(self.action_model.parameters())
+        if self.enable_rgb_stylegan:
+            params += list(self.rgb_decoder.parameters())
+        if self.enable_semantic:
+            params += list(self.semantic_decoder.parameters())
+        self.optimizer = torch.optim.AdamW(
+            params,
+            lr=args_override['lr'],
+            weight_decay=args_override.get('weight_decay', 0.0),
+        )
         
         print(f'KL Weight {self.kl_weight}')
 
@@ -52,14 +65,14 @@ class ACTPolicy(nn.Module):
                                          std=[0.229, 0.224, 0.225, 0.25])
         
         batch = {}
-        image = normalize(image)
+        normalized_image = normalize(image) #img shape:  torch.Size([32, 4, 480, 640]) [b,c,h,w]
         batch_image = compose_rgb_labels(image)
         batch = {**batch, **batch_image}
         if actions is not None: # training time
             output  = {}
-            actions = actions[:, :self.action_model.num_queries]
+            actions = actions[:, self.action_model.action_queries]
             batch["action"] = actions
-            is_pad  = is_pad[:, :self.action_model.num_queries]
+            is_pad  = is_pad[:, self.action_model.action_queries]
             # print(f"is pad {is_pad}")
             
             """ 
@@ -79,7 +92,7 @@ class ACTPolicy(nn.Module):
             """
             
             # Action policy.
-            a_hat, hs_image, is_pad_hat, (mu, logvar), probs, binaries, latent_input = self.action_model(qpos, image, env_state, actions, is_pad, vq_sample)
+            a_hat, hs_image, is_pad_hat, (mu, logvar), probs, binaries, latent_input = self.action_model(qpos, normalized_image, env_state, actions, is_pad, vq_sample)
             output["action"] = a_hat
             output["mu"]     = mu
             output["logvar"] = logvar
@@ -90,10 +103,10 @@ class ACTPolicy(nn.Module):
             #     # semantic_decoder_output = unpack_sequence_dim(
             #     #     semantic_decoder_output, b, s)
             #     output = {**output, **semantic_decoder_output}
-
+            # print("####hs_image size:", hs_image.shape)
             # Get RGB output.
             if self.enable_rgb_stylegan:
-                rgb_decoder_output = self.rgb_decoder(hs_image)
+                rgb_decoder_output = self.rgb_decoder(hs_image) #input :[batch_size, cam_num, hidden_dim] ]
                 # rgb_decoder_output = unpack_sequence_dim(rgb_decoder_output, b, s)
                 output = {**output, **rgb_decoder_output}
 
@@ -101,9 +114,12 @@ class ACTPolicy(nn.Module):
                 rgb_diffuser_output = self.rgb_diffuser(batch, hs_image)
                 output = {**output, **rgb_diffuser_output}"""
 
-            
-            losses = self.losses(output, batch)
-            
+            # print("output rgb_label_2:", output['rgb_label_2'].shape)
+            # print("output rgb_label_4:", output['rgb_label_4'].shape)
+            # print("batch rgb_label_2:" , batch['rgb_label_4'].shape)
+            # print("batch rgb_label_4:" , batch['rgb_label_4'].shape)
+            losses          = self.losses(output, batch)
+            # losses['loss']  = loss_reducing(losses)
             """loss_dict = dict()
             if self.vq or self.model.encoder is None:
                 total_kld = [torch.tensor(0.0)]
@@ -121,7 +137,7 @@ class ACTPolicy(nn.Module):
             
             return losses
         else: # inference time
-            a_hat, _, _, (_, _), _, _ , _ = self.action_model(qpos, image, env_state, vq_sample=vq_sample) # no action, sample from prior
+            a_hat, _, _, (_, _), _, _ , _ = self.action_model(qpos, normalized_image, env_state, vq_sample=vq_sample) # no action, sample from prior
             return a_hat
 
     def configure_optimizers(self):
@@ -129,8 +145,8 @@ class ACTPolicy(nn.Module):
 
     @torch.no_grad()
     def vq_encode(self, qpos, actions, is_pad):
-        actions = actions[:, :self.action_model.num_queries]
-        is_pad = is_pad[:, :self.action_model.num_queries]
+        actions = actions[:, self.action_model.action_queries]
+        is_pad  = is_pad[:, self.action_model.action_queries]
         
         _, _, binaries, _, _ = self.action_model.encode(qpos, actions, is_pad)
 
