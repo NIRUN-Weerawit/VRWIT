@@ -4,7 +4,8 @@ import os
 ### Task parameters
 # DATA_DIR = 'datasets'
 # DATA_DIR = "/media/ucluser/Extreme SSD/datasets"
-DATA_DIR = "/media/ucluser/PortableSSD/model_datasets"
+# DATA_DIR = "/media/ucluser/PortableSSD/model_datasets"
+DATA_DIR = "/mnt/bigdata/00_students/wee_ucl"
 
 SIM_TASK_CONFIGS = {
     'sim_transfer_cube_scripted':{
@@ -39,7 +40,8 @@ SIM_TASK_CONFIGS = {
         'num_episodes': None,
         'episode_len': 1000,
         'name_filter': lambda n: 'sim' not in n,
-        'camera_names': ['cam1', 'cam2']
+        'camera_names': ['cam1', 'cam2'],
+        'train_ratio': 0.9
     },
 
     'sim_transfer_cube_scripted_mirror':{
