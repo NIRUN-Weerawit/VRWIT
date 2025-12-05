@@ -43,9 +43,11 @@ class AdaptiveInstanceNorm(nn.Module):
 
         # Normalising with the style vector
         style = self.latent_affine(style).unsqueeze(-1).unsqueeze(-1)
+        # print("####Style dim: ", style.shape)
+        channel_dim = style.dim() - 3  # channel axis
         scale, bias = torch.split(style,
                                   split_size_or_sections=self.out_channels,
-                                  dim=1)
+                                  dim=channel_dim)
         out = scale * x + bias
         return out
 
@@ -134,10 +136,13 @@ class RgbHead(nn.Module):
             nn.Conv2d(in_channels, 3, kernel_size=1, padding=0), )
 
     def forward(self, x: torch.Tensor) -> Dict:
-        output = {
-            f'rgb_{self.downsample_factor}': self.rgb_head(x),
-        }
-        return output
+        rgb = self.rgb_head(x)
+        rgb = torch.sigmoid(rgb)  # now in [0,1]
+        return {f'rgb_{self.downsample_factor}': rgb}
+        # output = {
+        #     f'rgb_{self.downsample_factor}': self.rgb_head(x),
+        # }
+        # return output
 
 
 @gin.configurable
@@ -170,8 +175,8 @@ class StyleGanDecoder(nn.Module):
             DecoderBlock(constant_n_channels,
                          constant_n_channels,
                          latent_n_channels,
-                         upsample=True) for _ in range(3)
-        ])
+                         upsample=True) for _ in range(2)   
+        ])   #Upsampling is changed from 6 to 5 steps : from 3 to 2 middle conv + conv1/2/3 and the constant_size is chnaged from (5,8) to (15,20)
 
         # 512 x 24 x 24
         self.conv1 = DecoderBlock(constant_n_channels,
@@ -190,21 +195,28 @@ class StyleGanDecoder(nn.Module):
         # 64 x 192 x 192
 
     def forward(self, w: torch.Tensor) -> Dict:
-        batch_size = w.shape[0]
-        x = self.constant_tensor.unsqueeze(0).repeat([batch_size, 1, 1, 1])
+        batch_size, num_cam, hidden_dim = w.shape
+        # print("#####Shape of w (hs_image):", w.shape)
+        w_flat = w.reshape(batch_size * num_cam,hidden_dim)
+        
+        x = self.constant_tensor.unsqueeze(0).repeat([batch_size * num_cam, 1, 1, 1])
 
-        x = self.first_norm(x, w)
-        x = self.first_conv(x, w)
+        x = self.first_norm(x, w_flat)
+        x = self.first_conv(x, w_flat)
 
         for module in self.middle_conv:
-            x = module(x, w)
+            x = module(x, w_flat)
 
-        x = self.conv1(x, w)
+        x = self.conv1(x, w_flat)
         output_4 = self.head_4(x)
-        x = self.conv2(x, w)
+        x = self.conv2(x, w_flat)
         output_2 = self.head_2(x)
-        x = self.conv3(x, w)
+        x = self.conv3(x, w_flat)
         output_1 = self.head_1(x)
-
-        output = {**output_4, **output_2, **output_1}
-        return output
+        # reshape outputs back to [batch, num_cam, ...]
+        def unflatten(d):
+            # for k, v in d.items():
+                # print(f"{k} : {v.shape}")
+            return {k: v.reshape(batch_size, num_cam, *v.shape[1:]) for k, v in d.items()}
+        # output = {**output_4, **output_2, **output_1}
+        return {**unflatten(output_4), **unflatten(output_2), **unflatten(output_1)}
