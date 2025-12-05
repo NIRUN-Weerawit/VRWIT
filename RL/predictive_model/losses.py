@@ -20,8 +20,9 @@ import torch
 import torch.nn.functional as F
 import torchvision.models
 from torch import nn
+from torch.utils.tensorboard import SummaryWriter
 
-from model.x_mobility.utils import pack_sequence_dim
+from utils import pack_sequence_dim
 
 
 @gin.configurable
@@ -160,7 +161,7 @@ class ActionLoss(nn.Module):
             norm: decides L1 or L2 loss.
 
         Inputs:
-            prediction: predicted action (b, s, c_a)
+            prediction: predicted action (b, s, c_a) [5,25,7]
             target: ground-truth action (b, s, c_a)
 
         Returns:
@@ -181,7 +182,7 @@ class ActionLoss(nn.Module):
     def forward(self, prediction: torch.Tensor,
                 target: torch.Tensor) -> torch.Tensor:
         loss = self.loss_fn(prediction, target, reduction='none')
-       
+        # print("action loss dim: ", loss.shape)
         # Sum channel dimension
         loss = torch.sum(loss, dim=self.channel_dim, keepdims=True)
         return loss.mean()
@@ -366,8 +367,12 @@ class XMobilityLoss(nn.Module):
             self.diffusion_loss = DiffusionLoss()
 
         self.depth_loss = DepthLoss()
+        self.writer = SummaryWriter('logs_rgb')
+        self.step = 0
+        
 
     def forward(self, output: Dict, batch: Dict) -> Dict:
+        
         losses = {}
 
         if not self.is_gwm_pretrain:
@@ -381,6 +386,7 @@ class XMobilityLoss(nn.Module):
 
         total_kld, dim_wise_kld, mean_kld = kl_divergence( output["mu"],  output["logvar"])
         losses['kl'] = self.kl_weight * total_kld[0]
+        # losses['kl'] = self.kl_weight * self.kl_loss(output['mu'],output['logvar'])
         
         # losses['kl'] = self.kl_weight * self.kl_loss(output['prior'],
         #                                              output['posterior'])
@@ -410,6 +416,17 @@ class XMobilityLoss(nn.Module):
                     prediction=output[f"rgb_{downsampling_factor}"],
                     target=batch[f"rgb_label_{downsampling_factor}"],
                 )
+                if self.step % 100 == 0:
+                    pred = output[f"rgb_{downsampling_factor}"][0, 0]  # First batch, first timestep
+                    target = batch[f"rgb_label_{downsampling_factor}"][0, 0]
+                    mean = torch.tensor([0.485,0.456,0.406], device=pred.device).view(1,3,1,1)
+                    std = torch.tensor([0.229,0.224,0.225], device=pred.device).view(1,3,1,1) 
+                    # print(f"pred.shape = {pred.shape}   |   target.shape={target.shape}")
+                    # print(f"rgb_{downsampling_factor} : min= {pred.min()}, max= {pred.max()}   |   rgb_label_{downsampling_factor} : min= {target.min()}, max= {target.max()}  ")
+                    self.writer.add_images(f'rgb_{downsampling_factor}/prediction', pred.unsqueeze(0), self.step)
+                    # self.writer.add_images(f'rgb_{downsampling_factor}/prediction', torch.clamp(pred.unsqueeze(0)*std+mean,0,1), self.step)
+                    self.writer.add_images(f'rgb_{downsampling_factor}/target',  target.unsqueeze(0), self.step)
+                    
                 losses[
                     f"rgb_{downsampling_factor}"] = discount * self.rgb_weight * rgb_loss
 
@@ -422,5 +439,8 @@ class XMobilityLoss(nn.Module):
         if 'depth' in output and 'depth_gt' in output:
             losses['depth'] = self.depth_weight * self.depth_loss(
                 output['depth'], output['depth_gt'])
-
+        
+        self.step += 1
+        
         return losses
+    
