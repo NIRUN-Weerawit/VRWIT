@@ -135,10 +135,12 @@ class RgbHead(nn.Module):
         self.rgb_head = nn.Sequential(
             nn.Conv2d(in_channels, 3, kernel_size=1, padding=0), )
 
-    def forward(self, x: torch.Tensor) -> Dict:
+    def forward(self, x: torch.Tensor, cam: int) -> Dict:
         rgb = self.rgb_head(x)
         rgb = torch.sigmoid(rgb)  # now in [0,1]
-        return {f'rgb_{self.downsample_factor}': rgb}
+        return {f'rgb_cam_{cam+1}_{self.downsample_factor}': rgb}
+        # print(f"output of RgbHead is of shape: {output.shape} with keys: {output.keys()}")    
+
         # output = {
         #     f'rgb_{self.downsample_factor}': self.rgb_head(x),
         # }
@@ -197,26 +199,31 @@ class StyleGanDecoder(nn.Module):
     def forward(self, w: torch.Tensor) -> Dict:
         batch_size, num_cam, hidden_dim = w.shape
         # print("#####Shape of w (hs_image):", w.shape)
-        w_flat = w.reshape(batch_size * num_cam,hidden_dim)
-        
-        x = self.constant_tensor.unsqueeze(0).repeat([batch_size * num_cam, 1, 1, 1])
+        output = {}
+        for cam in range(num_cam):
+            w_flat = w[:, cam]
+            
+            # w_flat = w.reshape(batch_size * num_cam,hidden_dim)
+            
+            x = self.constant_tensor.unsqueeze(0).repeat([batch_size, 1, 1, 1])
 
-        x = self.first_norm(x, w_flat)
-        x = self.first_conv(x, w_flat)
+            x = self.first_norm(x, w_flat)
+            x = self.first_conv(x, w_flat)
 
-        for module in self.middle_conv:
-            x = module(x, w_flat)
+            for module in self.middle_conv:
+                x = module(x, w_flat)
 
-        x = self.conv1(x, w_flat)
-        output_4 = self.head_4(x)
-        x = self.conv2(x, w_flat)
-        output_2 = self.head_2(x)
-        x = self.conv3(x, w_flat)
-        output_1 = self.head_1(x)
-        # reshape outputs back to [batch, num_cam, ...]
-        def unflatten(d):
-            # for k, v in d.items():
-                # print(f"{k} : {v.shape}")
-            return {k: v.reshape(batch_size, num_cam, *v.shape[1:]) for k, v in d.items()}
-        # output = {**output_4, **output_2, **output_1}
-        return {**unflatten(output_4), **unflatten(output_2), **unflatten(output_1)}
+            x = self.conv1(x, w_flat)
+            output_4 = self.head_4(x, cam)
+            x = self.conv2(x, w_flat)
+            output_2 = self.head_2(x, cam)
+            x = self.conv3(x, w_flat)
+            output_1 = self.head_1(x, cam)
+            # reshape outputs back to [batch, num_cam, ...]
+            def unflatten(d):
+                # for k, v in d.items():
+                    # print(f"{k} : {v.shape}")
+                return {k: v.reshape(batch_size, 1, *v.shape[1:]) for k, v in d.items()}
+            # output = {**output_4, **output_2, **output_1}
+            output =  {**output, **unflatten(output_4), **unflatten(output_2), **unflatten(output_1)}
+        return output

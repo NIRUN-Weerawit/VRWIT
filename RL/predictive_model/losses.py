@@ -367,7 +367,7 @@ class XMobilityLoss(nn.Module):
             self.diffusion_loss = DiffusionLoss()
 
         self.depth_loss = DepthLoss()
-        self.writer = SummaryWriter('logs_rgb')
+        self.writer = SummaryWriter('logs_rgb_1')
         self.step = 0
         
 
@@ -390,7 +390,7 @@ class XMobilityLoss(nn.Module):
         
         # losses['kl'] = self.kl_weight * self.kl_loss(output['prior'],
         #                                              output['posterior'])
-
+        # print(f"output for calculating loss is of shape: {output.shape} with keys: {output.keys}") 
         # Semantic segmentation loss.
         if self.enable_semantic:
             for downsampling_factor in [1, 2, 4]:
@@ -409,26 +409,27 @@ class XMobilityLoss(nn.Module):
         # StyleGan RGB regression loss.
         if self.enable_rgb_stylegan:
             for downsampling_factor in [1, 2, 4]:
-                if f"rgb_{downsampling_factor}" not in output:
-                    continue
-                discount = 1 / downsampling_factor
-                rgb_loss = self.rgb_loss(
-                    prediction=output[f"rgb_{downsampling_factor}"],
-                    target=batch[f"rgb_label_{downsampling_factor}"],
-                )
-                if self.step % 100 == 0:
-                    pred = output[f"rgb_{downsampling_factor}"][0, 0]  # First batch, first timestep
-                    target = batch[f"rgb_label_{downsampling_factor}"][0, 0]
-                    mean = torch.tensor([0.485,0.456,0.406], device=pred.device).view(1,3,1,1)
-                    std = torch.tensor([0.229,0.224,0.225], device=pred.device).view(1,3,1,1) 
-                    # print(f"pred.shape = {pred.shape}   |   target.shape={target.shape}")
-                    # print(f"rgb_{downsampling_factor} : min= {pred.min()}, max= {pred.max()}   |   rgb_label_{downsampling_factor} : min= {target.min()}, max= {target.max()}  ")
-                    self.writer.add_images(f'rgb_{downsampling_factor}/prediction', pred.unsqueeze(0), self.step)
-                    # self.writer.add_images(f'rgb_{downsampling_factor}/prediction', torch.clamp(pred.unsqueeze(0)*std+mean,0,1), self.step)
-                    self.writer.add_images(f'rgb_{downsampling_factor}/target',  target.unsqueeze(0), self.step)
-                    
-                losses[
-                    f"rgb_{downsampling_factor}"] = discount * self.rgb_weight * rgb_loss
+                for cam in range(2):
+                    if f"rgb_cam_{cam+1}_{downsampling_factor}" not in output:
+                        continue
+                    discount = 1 / downsampling_factor
+                    rgb_loss = self.rgb_loss(
+                        prediction=output[f"rgb_cam_{cam+1}_{downsampling_factor}"],
+                        target=batch[f"rgb_cam_{cam+1}_label_{downsampling_factor}"],
+                    )
+                    if self.step % 100 == 0:
+                        pred = output[f"rgb_cam_{cam+1}_{downsampling_factor}"][0, 0]  # First batch, first timestep
+                        target = batch[f"rgb_cam_{cam+1}_label_{downsampling_factor}"][0, 0]
+                        mean = torch.tensor([0.485,0.456,0.406], device=pred.device).view(1,3,1,1)
+                        std = torch.tensor([0.229,0.224,0.225], device=pred.device).view(1,3,1,1) 
+                        # print(f"pred.shape = {pred.shape}   |   target.shape={target.shape}")
+                        # print(f"rgb_{downsampling_factor} : min= {pred.min()}, max= {pred.max()}   |   rgb_label_{downsampling_factor} : min= {target.min()}, max= {target.max()}  ")
+                        self.writer.add_images(f'rgb_cam_{cam+1}_{downsampling_factor}/prediction', pred.unsqueeze(0), self.step)
+                        # self.writer.add_images(f'rgb_{downsampling_factor}/prediction', torch.clamp(pred.unsqueeze(0)*std+mean,0,1), self.step)
+                        self.writer.add_images(f'rgb_cam_{cam+1}_{downsampling_factor}/target',  target.unsqueeze(0), self.step)
+                        
+                    losses[
+                        f"rgb_cam_{cam+1}_{downsampling_factor}"] = discount * self.rgb_weight * rgb_loss
 
         # Diffusion RGB loss.
         if self.enable_rgb_diffusion:

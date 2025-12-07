@@ -148,24 +148,31 @@ def compose_rgb_labels(batch):
     # if img.ndim == 5:
     #     # pick camera cam_idx
     #     img = img[:, 0]      # -> [B, C, H, W]
-    img = img[:, 0, :3]  # drop depth
-    img = img.unsqueeze(1)
+    img = img[:, :, :3]  # drop depth   [B, cam, C, H, W] = [B, 2, 3, H, W]
+    # img = img.unsqueeze(1)
     # 3. Build pyramid of downsampled labels
     output = {}
     # print("img shape: ", img.shape)
-    output['rgb_label_1'] = img
+    for cam in range(img.shape[1]):
+        cam_img = img[:, cam]
+        cam_img = cam_img.unsqueeze(1)
+        output[f'rgb_cam_{cam+1}_label_1'] = cam_img
+        assert cam_img.ndim == 5 , f"shape of cam_{cam+1}_img is {cam_img.shape}"
+    
+    # output['rgb__label_1'] = img
     h, w = img.shape[-2:]
     
     # Create downsampled versions
     for downsample_factor in [2, 4]:
-        size = (h // downsample_factor, w // downsample_factor)
-        previous_label_factor = downsample_factor // 2
-        
-        output[f'rgb_label_{downsample_factor}'] = interpolate_resize(
-            output[f'rgb_label_{previous_label_factor}'],
-            size,
-            mode=tvf.InterpolationMode.BILINEAR,
-        )
+        for cam in range(img.shape[1]): 
+            size = (h // downsample_factor, w // downsample_factor)
+            previous_label_factor = downsample_factor // 2
+            
+            output[f'rgb_cam_{cam+1}_label_{downsample_factor}'] = interpolate_resize(
+                output[f'rgb_cam_{cam+1}_label_{previous_label_factor}'],
+                size,
+                mode=tvf.InterpolationMode.BILINEAR,
+            )
     # print("*****************batch rgb_label_1 shape: ", output['rgb_label_1'].shape)
     # print("*****************batch rgb_label_2 shape: ", output['rgb_label_2'].shape)
     # print("*****************batch rgb_label_4 shape: ", output['rgb_label_4'].shape)
