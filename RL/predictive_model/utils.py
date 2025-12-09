@@ -148,31 +148,35 @@ def compose_rgb_labels(batch):
     # if img.ndim == 5:
     #     # pick camera cam_idx
     #     img = img[:, 0]      # -> [B, C, H, W]
-    img = img[:, :, :3]  # drop depth   [B, cam, C, H, W] = [B, 2, 3, H, W]
+    img = img[:, :, :, :3]  # drop depth   [B, cam_num, frames, C, H, W] = [B, 2, 5, 3, H, W]
     # img = img.unsqueeze(1)
     # 3. Build pyramid of downsampled labels
     output = {}
     # print("img shape: ", img.shape)
-    for cam in range(img.shape[1]):
-        cam_img = img[:, cam]
-        cam_img = cam_img.unsqueeze(1)
-        output[f'rgb_cam_{cam+1}_label_1'] = cam_img
-        assert cam_img.ndim == 5 , f"shape of cam_{cam+1}_img is {cam_img.shape}"
+    # img shape = [batch, cam_name, frames, c, h, w]
+    batch, cam_name, frames, c, h, w = img.shape
+    for cam in range(cam_name):
+        for frame in range(frames):
+            cam_img = img[:, cam, frame]
+            cam_img = cam_img.unsqueeze(1)
+            output[f'rgb_cam_{cam+1}_label_1_{frame}'] = cam_img
+            assert cam_img.ndim == 5 , f"shape of cam_{cam+1}_img is {cam_img.shape}"
     
     # output['rgb__label_1'] = img
     h, w = img.shape[-2:]
     
     # Create downsampled versions
     for downsample_factor in [2, 4]:
-        for cam in range(img.shape[1]): 
-            size = (h // downsample_factor, w // downsample_factor)
-            previous_label_factor = downsample_factor // 2
-            
-            output[f'rgb_cam_{cam+1}_label_{downsample_factor}'] = interpolate_resize(
-                output[f'rgb_cam_{cam+1}_label_{previous_label_factor}'],
-                size,
-                mode=tvf.InterpolationMode.BILINEAR,
-            )
+        for cam in range(cam_name): 
+            for frame in range(frames):
+                size = (h // downsample_factor, w // downsample_factor)
+                previous_label_factor = downsample_factor // 2
+                
+                output[f'rgb_cam_{cam+1}_label_{downsample_factor}_{frame}'] = interpolate_resize(
+                    output[f'rgb_cam_{cam+1}_label_{previous_label_factor}_{frame}'],
+                    size,
+                    mode=tvf.InterpolationMode.BILINEAR,
+                )
     # print("*****************batch rgb_label_1 shape: ", output['rgb_label_1'].shape)
     # print("*****************batch rgb_label_2 shape: ", output['rgb_label_2'].shape)
     # print("*****************batch rgb_label_4 shape: ", output['rgb_label_4'].shape)
@@ -261,8 +265,8 @@ class EpisodicDataset(torch.utils.data.Dataset):
                 
                 for cam_name in self.camera_names:
                     # print("cam:", cam_name)
-                    image_dict[cam_name] = root[f'/images/colors/{cam_name}'][start_ts]
-                    depth_dict[cam_name] = root[f'/images/depths/{cam_name}'][start_ts]
+                    image_dict[cam_name] = root[f'/images/colors/{cam_name}'][start_ts:start_ts+3]
+                    depth_dict[cam_name] = root[f'/images/depths/{cam_name}'][start_ts:start_ts+3]
                 if compressed:
                     for cam_name in image_dict.keys():
                         decompressed_image      = cv2.imdecode(image_dict[cam_name], 1)
@@ -270,7 +274,32 @@ class EpisodicDataset(torch.utils.data.Dataset):
                         decompressed_depth      = cv2.imdecode(depth_dict[cam_name], 1)
                         depth_dict[cam_name]    = np.array(decompressed_depth)
 
-
+                # Pad images and depths to ensure they have exactly 3 frames
+                for cam_name in self.camera_names:
+                    img = image_dict[cam_name]
+                    dep = depth_dict[cam_name]
+                    # print(f"shape of img {img.shape}")
+                    # print(f"shape of dep {dep.shape}")
+                    # Ensure img and dep are 4D (frames, H, W, C)
+                    if img.ndim == 3:
+                        # If decompressed, each frame is a single image (H, W, C)
+                        # This shouldn't happen as cv2.imdecode on a sequence should give multiple frames
+                        img = np.expand_dims(img, axis=0)
+                    if dep.ndim == 3:
+                        dep = np.expand_dims(dep, axis=0)
+                    
+                    # Pad to 3 frames if fewer frames are available
+                    if img.shape[0] < 3:
+                        pad_frames = 3 - img.shape[0]
+                        # Repeat the last frame to pad
+                        last_img = img[-1:].copy()  # shape: (1, H, W, C)
+                        last_dep = dep[:, -1:].copy()  # shape: (1, H, W, C)
+                        image_dict[cam_name] = np.concatenate([img] + [last_img] * pad_frames, axis=0)
+                        depth_dict[cam_name] = np.concatenate([dep] + [last_dep] * pad_frames, axis=1)
+                    else:
+                        image_dict[cam_name] = img
+                        depth_dict[cam_name] = dep
+                
                 # get all actions after and including start_ts
                 if is_sim:
                     action = action[start_ts:]
@@ -314,20 +343,21 @@ class EpisodicDataset(torch.utils.data.Dataset):
             # all_cam_depths  = (all_cam_depths - depth_mean) / depth_std     #normalize the depth information each camera the same way
             
             # construct observations
-            image_data  = torch.from_numpy(all_cam_images)
-            depth_data  = torch.from_numpy(all_cam_depths).unsqueeze(-1)
+            image_data  = torch.from_numpy(all_cam_images.copy())
+            depth_data  = torch.from_numpy(all_cam_depths.copy())
             obs_data   = torch.from_numpy(obs).float()
             action_data = torch.from_numpy(padded_action).float()
             is_pad      = torch.from_numpy(is_pad).bool()
-            
-            # channel last
-            image_data = torch.einsum('k h w c -> k c h w', image_data)
-            depth_data = torch.einsum('k h w c -> k c h w', depth_data)
+            # print("shape of image data:", {image_data.shape})
+            # print("shape of depth data:", {depth_data.shape})
+            # channel last  # [cam_names frames height width channels]
+            image_data = torch.einsum('k f h w c -> k f c h w', image_data)
+            depth_data = torch.einsum('k c f h w -> k f c h w', depth_data)
 
             # augmentation
             if self.transformations is None:
                 print('Initializing transformations')
-                original_size = image_data.shape[2:]
+                original_size = image_data.shape[3:]
                 ratio = 0.95
                 self.transformations = [
                     transforms.RandomCrop(size=[int(original_size[0] * ratio), int(original_size[1] * ratio)]),
@@ -350,7 +380,7 @@ class EpisodicDataset(torch.utils.data.Dataset):
                 # normalize to mean 0 std 1
                 action_data = (action_data - self.norm_stats["action_mean"]) / self.norm_stats["action_std"]
             
-            visual_data = torch.concatenate([image_data, depth_data], axis = 1)
+            visual_data = torch.concatenate([image_data, depth_data], axis = 2)
             obs_data = (obs_data - self.norm_stats["obs_mean"]) / self.norm_stats["obs_std"]
 
         except Exception as e:

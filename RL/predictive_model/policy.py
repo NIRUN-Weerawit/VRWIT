@@ -65,15 +65,23 @@ class ACTPolicy(nn.Module):
                                          std=[0.229, 0.224, 0.225, 0.25])
         
         batch = {}
-        normalized_image = normalize(image) #img shape:  torch.Size([32, 4, 480, 640]) [b,c,h,w]
-        batch_image = compose_rgb_labels(image)
-        batch = {**batch, **batch_image}
+        # frames = 3
+        # print(f"input images shape in policy : {image.shape}")
+        b, num_cam, frames, c, h, w = image.shape
+        # print(f"first input images shape in policy : {image.shape}")
+        # img shape:  torch.Size([32, 2, frames, 4, 480, 640]) [b,cam,f,c,h,w]
+        normalized_image = normalize(image)[:,:,0] # normalized img shape: torch.Size([32, 4, 480, 640]) [b,c,h,w]
         if actions is not None: # training time
             output  = {}
             actions = actions[:, self.action_model.action_queries]
             batch["action"] = actions
             is_pad  = is_pad[:, self.action_model.action_queries]
             # print(f"is pad {is_pad}")
+            batch_rgb_images = compose_rgb_labels(image[:,:,:frames])  # img shape:  torch.Size([32, frames, 4, 480, 640]) [b,f,c,h,w]
+            batch = {**batch, **batch_rgb_images}
+            # TODO : do semantic segmentation using SAM3 
+            # batch_seg_images = compose_seg_labels(image)
+            #batch = {**batch, batch_seg_images}
             
             """ 
             # Encode RGB images, speed to a 512 dimensional embedding
@@ -106,7 +114,9 @@ class ACTPolicy(nn.Module):
             # print("####hs_image size:", hs_image.shape)
             # Get RGB output.
             if self.enable_rgb_stylegan:
-                rgb_decoder_output = self.rgb_decoder(hs_image) #input :[batch_size, cam_num, hidden_dim] ]
+                assert hs_image.ndim == 3, f"shape is {hs_image.shape}"
+                hs_image = hs_image.view(b, num_cam, frames, self.hidden_dim)
+                rgb_decoder_output = self.rgb_decoder(hs_image) #input :[batch_size, num_cam x frames, hidden_dim] ]
                 # rgb_decoder_output = unpack_sequence_dim(rgb_decoder_output, b, s)
                 output = {**output, **rgb_decoder_output}
 
