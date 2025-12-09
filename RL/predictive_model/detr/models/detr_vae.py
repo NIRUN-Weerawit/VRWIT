@@ -46,7 +46,7 @@ class DETRVAE(nn.Module):
         """
         super().__init__()
         self.num_action_queries = num_queries
-        self.num_image_queries  = 1
+        self.num_image_queries  = 6  # 2 cameras x 3 future frames
         self.action_queries = slice(0, self.num_action_queries)
         self.image_queries = slice(self.num_action_queries, self.num_action_queries + self.num_image_queries)
         self.camera_names = camera_names
