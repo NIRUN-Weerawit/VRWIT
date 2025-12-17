@@ -36,7 +36,7 @@ class ACTPolicy(nn.Module):
         # state_dim           = self.state_dim
         # Semantic segmentation
         if self.enable_semantic:
-            self.semantic_decoder = StyleGanDecoder(prediction_head=SegmentationHead, latent_n_channels=self.hidden_dim)
+            self.semantic_decoder   = StyleGanDecoder(prediction_head=SegmentationHead, latent_n_channels=self.hidden_dim)
 
         # RGB generation with StyleGan
         if self.enable_rgb_stylegan:
@@ -137,8 +137,12 @@ class ACTPolicy(nn.Module):
             
             return losses
         else: # inference time
-            a_hat, _, _, (_, _), _, _ , _ = self.action_model(qpos, normalized_image, env_state, vq_sample=vq_sample) # no action, sample from prior
-            return a_hat
+            a_hat, hs_image, _, (_, _), _, _ , _ = self.action_model(qpos, normalized_image, env_state, vq_sample=vq_sample) # no action, sample from prior
+            if self.enable_rgb_stylegan:
+                rgb_decoder_output = self.rgb_decoder(hs_image) #input :[batch_size, cam_num, hidden_dim] ]
+                # rgb_decoder_output = unpack_sequence_dim(rgb_decoder_output, b, s)
+                # output = {**output, **rgb_decoder_output}
+            return a_hat, rgb_decoder_output
 
     def configure_optimizers(self):
         return self.optimizer
