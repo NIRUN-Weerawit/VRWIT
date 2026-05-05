@@ -21,6 +21,7 @@ RMP Leaves:
 """
 
 import numpy as np
+import math
 
 
 # ====== ======================================== ==============================
@@ -37,15 +38,15 @@ class TargetAttractor:
     name = "target"
 
     def __init__(self,
-                 accel_p_gain=80.0,
-                 accel_d_gain=100.0,
+                 accel_p_gain=50.0,
+                 accel_d_gain=10.0,
                  accel_norm_eps=1e-3,
-                 metric_alpha_length_scale=0.5,
+                 metric_alpha_length_scale=0.05,
                  min_metric_alpha=0.1,
                  max_metric_scalar=2.0,
                  min_metric_scalar=0.1,
-                 proximity_boost_scalar=5.0,
-                 proximity_boost_length_scale=0.3):
+                 proximity_boost_scalar=3.0,
+                 proximity_boost_length_scale=0.1):
         self.accel_p_gain = accel_p_gain
         self.accel_d_gain = accel_d_gain
         self.accel_norm_eps = accel_norm_eps
@@ -62,9 +63,27 @@ class TargetAttractor:
         delta_norm = np.linalg.norm(delta) + self.accel_norm_eps
         delta_hat = delta / delta_norm
 
+        # Smooth PD: full gain when far, proportional when near
+        # Transition at metric_alpha_length_scale
+        if delta_norm < self.metric_alpha_length_scale:
+            # Proportional near goal (softens as we approach)
+            accel_p = self.accel_p_gain * delta
+        else:
+            # Constant-magnitude when far (fast response)
+            accel_p = self.accel_p_gain * delta_hat
+
+        # Damping: velocity-dependent, stronger near goal
+        boost_scaled = delta_norm / self.proximity_boost_length_scale
+        boost = np.exp(-0.5 * boost_scaled ** 2)
+        effective_d_gain = self.accel_d_gain * (1.0 + self.proximity_boost_scalar * boost)
+        accel_d = -effective_d_gain * np.asarray(xd, dtype=np.float64)
+
+        accel = accel_p + accel_d
+        
         # PD-like acceleration
-        accel = (self.accel_p_gain * delta / delta_norm
-                 - self.accel_d_gain * np.asarray(xd, dtype=np.float64))
+        # accel = (self.accel_p_gain * delta / delta_norm
+        #          - self.accel_d_gain * np.asarray(xd, dtype=np.float64))
+        
 
         # Metric: distance-dependent weighting
         scaled_dist = delta_norm / self.metric_alpha_length_scale
@@ -100,12 +119,12 @@ class OrientationAttractor:
     name = "orientation"
 
     def __init__(self,
-                 accel_p_gain=10.0,
-                 accel_d_gain=16.0,
+                 accel_p_gain=100.0,
+                 accel_d_gain=10.0,
                  accel_norm_eps=1e-4,
-                 metric_base=1.5,
-                 metric_proximity_boost=3.0,
-                 metric_length_scale=0.5):
+                 metric_base=0.2,
+                 metric_proximity_boost=1.0,
+                 metric_length_scale=0.2):
         self.accel_p_gain = accel_p_gain
         self.accel_d_gain = accel_d_gain
         self.accel_norm_eps = accel_norm_eps
@@ -162,11 +181,21 @@ class OrientationAttractor:
 
         omega = np.asarray(omega, dtype=np.float64)
         scaled_delta = min(delta_norm, np.pi)  # cap at 180 deg
+        delta_hat = delta / delta_norm
+        
+         # Smooth PD: proportional near goal, constant-magnitude when far
+        # Matches TargetAttractor pattern for stable composition
+        if delta_norm < self.metric_length_scale:
+            accel_p = self.accel_p_gain * delta
+        else:
+            accel_p = self.accel_p_gain * delta_hat
 
-        # Robust PD acceleration
-        accel = (self.accel_p_gain * delta / (scaled_delta + self.accel_norm_eps)
-                 - self.accel_d_gain * omega)
-
+        accel = accel_p - self.accel_d_gain * omega
+        
+        # # Robust PD acceleration
+        # accel = (self.accel_p_gain * delta / (scaled_delta + self.accel_norm_eps)
+        #          - self.accel_d_gain * omega)
+            
         # Metric: base + proximity boost as error shrinks
         scaled_dist = delta_norm / self.metric_length_scale
         boost = np.exp(-0.5 * scaled_dist ** 2)
@@ -181,8 +210,8 @@ class CSpaceTarget:
 
     name = "cspace_target"
 
-    def __init__(self, metric_scalar=0.05, position_gain=40.0,
-                 damping_gain=40.0, robust_thresh=0.5, inertia=1e-4):
+    def __init__(self, metric_scalar=0.05, position_gain=1.0,
+                 damping_gain=0.2, robust_thresh=0.5, inertia=1e-4):
         self.metric_scalar = metric_scalar
         self.position_gain = position_gain
         self.damping_gain = damping_gain
@@ -214,7 +243,7 @@ class ObstacleAvoidance:
 
     name = "obstacle"
 
-    def __init__(self, margin=0.1, repulsion_gain=800.0,
+    def __init__(self, margin=0.1, repulsion_gain=40.0,
                  repulsion_std_dev=0.3, metric_scalar=3.5,
                  metric_modulation_radius=0.5,
                  metric_exploder_std_dev=0.5,
@@ -272,32 +301,48 @@ class ObstacleAvoidance:
 
 
 class JointLimit:
-    """Exponential barrier function near joint limits."""
+    """Exponential barrier function near joint limits.
+
+    Matches the official rmp2 repo implementation (rmps.py:127-162).
+    Parameters match franka_config.yaml defaults.
+    """
 
     name = "joint_limit"
 
-    def __init__(self, metric_scalar=0.3, metric_length_scale=0.01,
-                 accel_potential_gain=2.0, accel_damper_gain=5.0):
+    def __init__(self,
+                 metric_scalar=0.1,
+                 metric_length_scale=0.01,
+                 metric_exploder_eps=0.001,
+                 metric_velocity_gate_length_scale=0.01,
+                 accel_damper_gain=200.0,
+                 accel_potential_gain=1.0,
+                 accel_potential_exploder_length_scale=0.1,
+                 accel_potential_exploder_eps=0.01):
         self.metric_scalar = metric_scalar
         self.metric_length_scale = metric_length_scale
-        self.accel_potential_gain = accel_potential_gain
+        self.metric_exploder_eps = metric_exploder_eps
+        self.metric_velocity_gate_length_scale = metric_velocity_gate_length_scale
         self.accel_damper_gain = accel_damper_gain
+        self.accel_potential_gain = accel_potential_gain
+        self.accel_potential_exploder_length_scale = accel_potential_exploder_length_scale
+        self.accel_potential_exploder_eps = accel_potential_exploder_eps
 
     def eval(self, dist, vel, **features):
         dist = np.maximum(np.asarray(dist, dtype=np.float64), 0.0)
         vel = np.asarray(vel, dtype=np.float64)
         n = len(dist)
 
-        # Metric: exponential barrier
+        # Metric: exponential barrier with sigmoid velocity gate
+        # When vel > 0 (moving away from limit), sigmoid approaches 1 -> metric suppressed
         metric_before = self.metric_scalar / (
-            dist / self.metric_length_scale + 1e-8)
-        # Velocity gate: reduce metric when moving away from limit
-        sig = 1.0 / (1.0 + np.exp(-vel / 0.1))
+            dist / self.metric_length_scale + self.metric_exploder_eps)
+        sig = 1.0 / (1.0 + np.exp(-vel / self.metric_velocity_gate_length_scale))
         metric = (1 - sig) * metric_before
 
         # Acceleration: repel from limit + damp velocity
-        scaled_x = dist / self.metric_length_scale
-        xdd_pos = self.accel_potential_gain / (scaled_x ** 2 + 1e-8)
+        scaled_x = dist / self.accel_potential_exploder_length_scale
+        xdd_pos = self.accel_potential_gain / (
+            scaled_x ** 2 + self.accel_potential_exploder_eps)
         xdd_vel = -self.accel_damper_gain * vel
         accel = xdd_pos + xdd_vel
 
@@ -310,7 +355,7 @@ class JointVelocityCap:
     name = "vel_cap"
 
     def __init__(self, max_velocity=2.0, velocity_damping_region=0.15,
-                 damping_gain=10.0, metric_weight=1.0):
+                 damping_gain=5.0, metric_weight=1.0):
         self.max_velocity = max_velocity
         self.velocity_damping_region = velocity_damping_region
         self.damping_gain = damping_gain
@@ -342,7 +387,7 @@ class JointDamping:
 
     name = "damping"
 
-    def __init__(self, accel_d_gain=10.0, metric_scalar=0.005, inertia=1e-4):
+    def __init__(self, accel_d_gain=5.0, metric_scalar=0.005, inertia=1e-4):
         self.accel_d_gain = accel_d_gain
         self.metric_scalar = metric_scalar
         self.inertia = inertia
@@ -413,14 +458,87 @@ class RMP2Solver:
             JointVelocityCap(),
             JointDamping(),
         ]
-        # Names for debugging
-        # self._leaf_names = (["target", "joint_limit"])
-        self._leaf_names = (["target"])
+        # self._leaf_names = ([
+        #     "target", "orientation", "cspace", "joint_limit", "vel_cap", "damping"
+        # ])
+        self._leaf_names = (["target", "orientation"])
+        # self._leaf_names = (["orientation"])
         # self._leaf_names = (["target", "orientation", "cspace", "joint_limit",
                             #  "vel_cap", "damping"])
-        
+
         # Cached obstacle leaves (reused instead of recreated every frame)
         self._obs_leaves = []
+
+        # Curvature state (persist q, J between solves for finite-diff)
+        self._prev_q = None
+        self._prev_J = None
+        self._fd_eps = 1e-4
+
+    # ---- Curvature helper: finite-difference second derivative ----
+    def _compute_curvatures(self, q, qd, leaves_data):
+        """Compute Christoffel-like curvature per leaf using central differences.
+
+        The official rmp2 repo uses TF autodiff to get dJ/dq.  We use
+        central differences:  dJ_k = (J(q+eps*e_k) - J(q-eps*e_k)) / (2*eps)
+        and then   crv = sum_k  dJ_k * qd_k  (matrix-vector product).
+
+        Leaves whose Jacobian is constant (cspace, joint_limit, vel_cap,
+        damping) have zero curvature.  Obstacle leaves are 1-D and
+        contribute negligible curvature, so they are set to zero as well.
+        """
+        n = self.n_joints
+        eps = self._fd_eps
+        crvs = []
+
+        for i, (x_leaf, xd_leaf, J_leaf) in enumerate(leaves_data):
+            leaf_dim = J_leaf.shape[0]
+            if i < len(self._leaf_names):
+                name = self._leaf_names[i]
+            else:
+                name = "obs_" + str(i - len(self._leaf_names))
+
+            # Constant-Jacobian leaves -> zero curvature
+            if name in ("cspace", "joint_limit", "vel_cap", "damping", "obstacle"):
+                crvs.append(np.zeros(leaf_dim, dtype=np.float64))
+                continue
+
+            # Task-space leaves (target, orientation) need curvature
+            crv = np.zeros(leaf_dim, dtype=np.float64)
+            for k in range(n):
+                q_plus = q.copy()
+                q_plus[k] += eps
+                q_minus = q.copy()
+                q_minus[k] -= eps
+
+                fk_plus = self.fk_fn(q_plus)
+                fk_minus = self.fk_fn(q_minus)
+                Jp = np.asarray(fk_plus[2], dtype=np.float64)
+                Jm = np.asarray(fk_minus[2], dtype=np.float64)
+
+                # Ensure Jacobian is (6, n_joints) - transpose if needed
+                if Jp.shape == (n, 6):
+                    Jp = Jp.T
+                    Jm = Jm.T
+
+                # Select the task-space slice
+                if name == "target":
+                    dJ = (Jp[:3, :] - Jm[:3, :]) / (2.0 * eps)
+                elif name == "orientation":
+                    dJ = (Jp[3:6, :] - Jm[3:6, :]) / (2.0 * eps)
+                else:
+                    crvs.append(np.zeros(leaf_dim, dtype=np.float64))
+                    break
+
+                # crv += dJ @ qd * qd[k]
+                crv += (dJ @ qd) * qd[k]
+
+            else:
+                crvs.append(crv)
+                continue
+
+            crvs.append(np.zeros(leaf_dim, dtype=np.float64))
+
+        return crvs
 
     # ---- Forward pass - build (x, xd_leaf, J) per leaf ----
     def forward_pass(self, q, qd, obstacles=None):
@@ -516,29 +634,51 @@ class RMP2Solver:
         # Forward pass
         leaves_data = self.forward_pass(q, qd, obstacles)
 
-        # Aggregate metrics and forces
+        # Compute curvatures (matches rmpgraph.py solve_rmp2 curvature step)
+        # crvs = self._compute_curvatures(q, qd, leaves_data)
+
+        # Aggregate metrics and forces (with curvature correction)
+        # Official formula: z = sum(M_i * a_i) - sum(M_i * crv_i)
+        # so f = sum(J^T M a) - sum(J^T M crv)
         M_agg = np.zeros((n, n), dtype=np.float64)
         f_agg = np.zeros(n, dtype=np.float64)
 
-        for leaf, name, (x_leaf, xd_leaf, J_leaf) in zip(
-                all_leaves, leaf_names, leaves_data):
-            # print(f"leaf_name: {name}")
+        # DISABLED: curvature correction — too expensive (28 FK calls/frame)
+        # crvs = self._compute_curvatures(q, qd, leaves_data)
+        crvs = [np.zeros(J_leaf.shape[0], dtype=np.float64)
+                for _, _, J_leaf in leaves_data]
+
+        for leaf, name, (x_leaf, xd_leaf, J_leaf), crv in zip(
+                all_leaves, leaf_names, leaves_data, crvs):
             metric_val, accel_val = leaf.eval(x_leaf, xd_leaf, **features)
 
-            # Pullback: M_tau += J^T @ M @ J,  f_tau += J^T @ M @ a
+            # Pullback: M_tau += J^T @ M @ J
+            # f_tau += J^T @ M @ (a - crv)  [curvature correction]
             if J_leaf.shape[0] == 1 and metric_val.shape == (1, 1):
                 # Scalar leaf (obstacle)
                 m_scalar = float(metric_val[0, 0])
                 a_scalar = float(accel_val[0])
+                # Curvature negligible for 1-D obstacle leaves
                 J = J_leaf
                 M_agg += m_scalar * (J.T @ J)
                 f_agg += m_scalar * a_scalar * J.T.flatten()
             else:
                 M_agg += J_leaf.T @ metric_val @ J_leaf
-                f_agg += J_leaf.T @ (metric_val @ accel_val)
+                # Curvature correction: subtract M @ crv term
+                acc_minus_crv = accel_val - metric_val @ crv
+                f_agg += J_leaf.T @ acc_minus_crv
+
+        # Metric normalization (matches rmpgraph.py:143-148)
+        # Scale M and f by same factor so the solve is invariant
+        # but numerically better-conditioned
+        M_max = float(np.max(np.abs(M_agg)))
+        if M_max > 1.0:
+            scale = M_max * 0.01
+            M_agg = M_agg / scale
+            f_agg = f_agg / scale
 
         # Regularise and solve
-        M_reg = M_agg + 1e-6 * np.eye(n, dtype=np.float64)
+        M_reg = M_agg + 1e-3 * np.eye(n, dtype=np.float64)
         try:
             L = np.linalg.cholesky(M_reg)
             z = np.linalg.solve(L, f_agg)
