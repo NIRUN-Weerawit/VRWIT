@@ -17,9 +17,9 @@ from torchvision import transforms
 
 from constants import FPS
 from constants import PUPPET_GRIPPER_JOINT_OPEN
-from utils import load_data # data functions
-from utils import sample_box_pose, sample_insertion_pose # robot functions
-from utils import compute_dict_mean, set_seed # helper functions
+from scripts.utils import load_data # data functions
+from scripts.utils import sample_box_pose, sample_insertion_pose # robot functions
+from scripts.utils import compute_dict_mean, set_seed # helper functions
 from policy import ACTPolicy, CNNMLPPolicy, DiffusionPolicy
 # from visualize_episodes import save_videos
 
@@ -597,7 +597,7 @@ if __name__ == '__main__':
     parser.add_argument('--lr',                 action='store', type=float, required=True,                      help='lr')
     parser.add_argument('--load_pretrain',      action='store_true',                            default=False)
     parser.add_argument('--eval_every',         action='store', type=int,   required=False,     default=120000, help='eval_every', )
-    parser.add_argument('--validate_every',     action='store', type=int,   required=False,     default=2500,   help='validate_every', )
+    parser.add_argument('--validate_every',     action='store', type=int,   required=False,     default=1000,   help='validate_every', )
     parser.add_argument('--save_every',         action='store', type=int,   required=False,     default=5000,   help='save_every', )
     parser.add_argument('--resume_ckpt_path',   action='store', type=str,   required=False,                     help='resume_ckpt_path', )
     parser.add_argument('--skip_mirrored_data', action='store_true')                      ,     

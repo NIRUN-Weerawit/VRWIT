@@ -5,7 +5,7 @@ import torch
 import numpy as np
 from detr.main import build_ACT_model_and_optimizer, build_CNNMLP_model_and_optimizer
 from losses import XMobilityLoss
-from utils import pack_sequence_dim, unpack_sequence_dim, compose_rgb_labels, loss_reducing
+from scripts.utils import pack_sequence_dim, unpack_sequence_dim, compose_rgb_labels, loss_reducing
 from decoders import StyleGanDecoder, SegmentationHead, RgbHead
 import IPython
 e = IPython.embed

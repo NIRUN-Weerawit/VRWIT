@@ -40,7 +40,7 @@ from policy import ACTPolicy
 from einops import rearrange
 from torchvision import transforms
 import matplotlib.pyplot as plt
-
+import gin
 torch.set_printoptions(precision=4, sci_mode=False)
 
 
@@ -194,6 +194,7 @@ policy_config = {'lr': 1e-4,
                 'action_dim': action_dim, # 16
                 'state_dim': state_dim,
                 }
+gin.parse_config_file("configs/base_train_config.gin", skip_unknown=True)
 camera_names   = policy_config["camera_names"]
 ckpt_dir = f"checkpoint_{chunk_size}_{args.ver}"
 # ckpt_dir = "checkpoint_25_01"
@@ -286,7 +287,7 @@ if not args.headless:
     if viewer is None:
         raise Exception("Failed to create viewer")
 
-asset_root = "../../../../assets"
+asset_root = "/home/ucluser/isaacgym/assets"
 
 # create table asset
 table_dims                          = gymapi.Vec3(0.6, 1.0, 0.01)
@@ -379,12 +380,12 @@ print("piper hand index", piper_hand_index)
 # print(f"PIPER PROPS: {piper_rigid_props}")
 box_rigid_props         = gym.get_asset_rigid_shape_properties(box_asset)
 p                       = box_rigid_props[0]
-p.friction         = 10.0    # static/dynamic friction (try 0.5→2.0)
-p.rolling_friction = 5.0    # prevents it from rolling out of grip
-p.restitution      = 0.0    # no bounce
-p.compliance       = 0.0    # fully stiff contacts
-p.contact_offset   = 0.001
-p.rest_offset      = 0.0
+p.friction              = 10.0    # static/dynamic friction (try 0.5→2.0)
+p.rolling_friction      = 5.0    # prevents it from rolling out of grip
+p.restitution           = 0.0    # no bounce
+p.compliance            = 0.0    # fully stiff contacts
+p.contact_offset        = 0.001
+p.rest_offset           = 0.0
 gym.set_asset_rigid_shape_properties(box_asset, box_rigid_props)
 # configure env grid
 num_envs    = args.num_envs
@@ -407,7 +408,8 @@ camera_handles          = []
 camera_props            = gymapi.CameraProperties()
 camera_props.width      = 640
 camera_props.height     = 480
-camera_1_position       = gymapi.Vec3(0.75, 0.0, 0.46)
+# camera_1_position       = gymapi.Vec3(0.75, 0.0, 0.46)
+camera_1_position       = gymapi.Vec3(0.05, 0.45, 0.36)
 camera_1_target         = gymapi.Vec3(0, 0, 0.03)
 # camera_2_position       = gymapi.Vec3(0.4, - 0.5, 0.6)
 # camera_2_target         = gymapi.Vec3(0, 0, 0)
@@ -429,6 +431,7 @@ axes_geom = gymutil.AxesGeometry(0.1)
 sphere_rot = gymapi.Quat.from_euler_zyx(0.5 * math.pi, 0, 0)
 sphere_pose = gymapi.Transform(r=sphere_rot)
 sphere_geom = gymutil.WireframeSphereGeometry(0.02, 12, 12, sphere_pose, color=(1, 0, 0))
+transformer_geom = gymutil.WireframeSphereGeometry(0.02, 12, 12, sphere_pose, color=(0, 1, 0))
 
 pose_model = gymapi.Transform()
 pose_model.p = gymapi.Vec3(0, 0.0, 0.0)
@@ -581,6 +584,7 @@ for i in range(num_envs):
     # Draw axes and sphere at attractor location
     gymutil.draw_lines(axes_geom, gym, viewer, env, attractor_properties.target)
     gymutil.draw_lines(sphere_geom, gym, viewer, env, attractor_properties.target)
+    gymutil.draw_lines(transformer_geom, gym, viewer, env, attractor_properties.target)
 
     gymutil.draw_lines(model_axes_geom, gym, viewer, env, attractor_properties.target)
     gymutil.draw_lines(model_sphere_geom, gym, viewer, env, attractor_properties.target)
@@ -916,6 +920,7 @@ def image_capture():
         rgb_image_2 = img_np_2[:, :, :3]
         
         # cv2.imshow("color_1",rgb_image_1)
+        cv2.imshow("color_1",cv2.cvtColor(rgb_image_1, cv2.COLOR_RGB2BGR))
         cv2.imshow("color_2",cv2.cvtColor(rgb_image_2, cv2.COLOR_RGB2BGR))
         cv2.waitKey(1)
         
@@ -1159,13 +1164,43 @@ while not gym.query_viewer_has_closed(viewer):
         curr_image = get_image(image_capture(), camera_names, stats)
         with torch.no_grad():
             # print(f"time:{t}, obs= {obs}")
-            all_actions = policy(obs, curr_image)
+            all_actions, rgb_prediction = policy(obs, curr_image)
             # print(torch.cuda.memory_summary(device=None, abbreviated=False))
             # trajectory = all_actions.squeeze(0).cpu().detach().numpy()
             # predicted_trajectories.append(post_process(trajectory))
             
             # print(f"all_actions size= {all_actions.shape}, query fre. = {query_frequency}")
             # print(f"time:{t}, all_actions = {all_actions}")
+    """
+    # show rgb reconstruciton
+    output_1 = rgb_prediction[f"rgb_cam_1_1"]
+    output_2 = rgb_prediction[f"rgb_cam_2_1"]
+    # print(f"rgb output keys = {rgb_prediction.keys()}")
+    # print(f"shape of rgb_1 reconstruction: {output_1.shape} ")
+    # print(f"shape of rgb_2 reconstruction: {output_2.shape} ")
+    
+    pred_1 = output_1[0]
+    pred_2 = output_2[0]
+    img_1 = pred_1.squeeze(0)          # -> [3, 480, 640]
+    img_2 = pred_2.squeeze(0)          # -> [3, 480, 640]
+    img_1 = img_1.permute(1, 2, 0)     # -> [480, 640, 3]
+    img_2 = img_2.permute(1, 2, 0)     # -> [480, 640, 3]
+    img_1 = img_1.detach().cpu().numpy()
+    img_2 = img_2.detach().cpu().numpy()
+    if img_1.max() <= 1.0:
+        img_1 = (img_1 * 255).astype('uint8')
+        img_2 = (img_2 * 255).astype('uint8')
+    else:
+        img_1 = img_1.astype('uint8')
+        img_2 = img_2.astype('uint8')
+    # print(f"size of rgb reconstruction: {len(pred)} ")
+    # print(f"type of rgb reconstruction: {type(pred)} ")
+      # First batch, first timestep
+    # cv2.imshow("rgb_1 reconstruction",cv2.cvtColor(img_1, cv2.COLOR_RGB2BGR))
+    # cv2.imshow("rgb_2 reconstruction",cv2.cvtColor(img_2, cv2.COLOR_RGB2BGR))
+    cv2.waitKey(1)"""
+
+    
     if temporal_agg:
         all_time_actions[[t], t:t+num_queries] = all_actions
         # print(f"all_time_acitons: size={all_time_actions.shape}, values={all_time_actions}")
@@ -1642,6 +1677,7 @@ while not gym.query_viewer_has_closed(viewer):
    
     # gymutil.draw_lines(axes_geom,   gym, viewer, envs[0], pose)
     gymutil.draw_lines(sphere_geom, gym, viewer, envs[0], pose)
+    gymutil.draw_lines(transformer_geom, gym, viewer, envs[0], pose_model)
     # gymutil.draw_lines(model_axes_geom,   gym, viewer, envs[0], pose_model)
     # gymutil.draw_lines(model_sphere_geom, gym, viewer, envs[0], pose_model)
     shadow_pose = gymapi.Transform()

@@ -461,7 +461,7 @@ class RMP2Solver:
         # self._leaf_names = ([
         #     "target", "orientation", "cspace", "joint_limit", "vel_cap", "damping"
         # ])
-        self._leaf_names = (["target", "orientation"])
+        self._leaf_names = (["target"])
         # self._leaf_names = (["orientation"])
         # self._leaf_names = (["target", "orientation", "cspace", "joint_limit",
                             #  "vel_cap", "damping"])

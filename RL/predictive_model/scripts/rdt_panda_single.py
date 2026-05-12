@@ -74,12 +74,15 @@ import time
 import warnings
 from PIL import Image as PImage
 
-from scripts.utils import slerp, get_observations, get_image, create_video_writer
 import sys
+sys.path.insert(0, '/home/ucluser/VRWIT/RL/predictive_model')
+# sys.path.insert(0, '/home/ucluser/RoboticsDiffusionTransformer/scripts')
+from scripts.utils import slerp, get_observations, get_image, create_video_writer
+
 sys.path.insert(0, '/home/ucluser/RoboticsDiffusionTransformer')
-sys.path.insert(0, '/home/ucluser/RoboticsDiffusionTransformer/scripts')
 from models.rdt_runner import RDTRunner
-from piper_model import create_model
+# from piper_model import create_model
+from scripts.maniskill_model import create_model
 
 warnings.filterwarnings("ignore", message=".*has been deprecated.*")
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -164,14 +167,14 @@ left_rgb_cam  = Camera(prim_path="/World/Realsense_left/RSD455/Camera_OmniVision
 right_rgb_cam = Camera(prim_path="/World/Realsense_right/RSD455/Camera_OmniVision_OV9782_Color",
                        frequency=frequency, resolution=(width, height))
 
-rgb_cams = [body_rgb_cam, mid_rgb_cam, left_rgb_cam]
+rgb_cams = [mid_rgb_cam, body_rgb_cam, right_rgb_cam]
 
 base.initialize()
 franka_hand.initialize()
 body_rgb_cam.initialize()
 mid_rgb_cam.initialize()
-left_rgb_cam.initialize()
-# right_rgb_cam.initialize()
+# left_rgb_cam.initialize()
+right_rgb_cam.initialize()
 
 # Joint drive parameters
 robot_prim = get_prim_at_path("/World/franka")
@@ -215,13 +218,14 @@ Model_target_marker.set_world_pose(position=target_pos)
 # ---------------------------------------------------------------------------
 args = {
     'max_publish_step': 300000,
-    'chunk_size': 10,
+    'chunk_size': 32,
     'arm_steps_length': [0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.2],
     'use_actions_interpolation': False,
     'use_depth_image': False,
     'disable_puppet_arm': False,
     'config_path': "/home/ucluser/RoboticsDiffusionTransformer/configs/base.yaml",
     'pretrained_model_name_or_path': "/home/ucluser/RoboticsDiffusionTransformer/checkpoint-170b-30000",
+    'pretrained_vision_encoder_name_or_path' : "/home/ucluser/RoboticsDiffusionTransformer/google/siglip-so400m-patch14-384",
     'lang_embeddings_path': "/home/ucluser/RoboticsDiffusionTransformer/data/empty_lang_embed.pt",
     'ctrl_freq': 25,
     'use_robot_base': False,
@@ -251,14 +255,12 @@ def make_policy(args):
         config = yaml.safe_load(fp)
     args.config = config
 
-    pretrained_vision_encoder_name_or_path = (
-        "/home/ucluser/RoboticsDiffusionTransformer/google/siglip-so400m-patch14-384"
-    )
+    
     model = create_model(
         args=args.config,
         dtype=torch.bfloat16,
-        pretrained="/home/ucluser/RoboticsDiffusionTransformer/checkpoint-170b-30000",
-        pretrained_vision_encoder_name_or_path=pretrained_vision_encoder_name_or_path,
+        pretrained=args.pretrained_model_name_or_path,
+        pretrained_vision_encoder_name_or_path=args.pretrained_vision_encoder_name_or_path,
         control_frequency=args.ctrl_freq,
     )
     return model
@@ -439,7 +441,7 @@ joint_ranges = np.array([
     [-3.0718,  -0.0698],   # joint4
     [-2.8973,  2.8973],   # joint5
     [-0.0175,  3.7525],   # joint6
-    [-2.8973,  2.8973]    # joint7
+    [-2.8973,  2.8973],    # joint7
     [ 0.0,     0.04],     # joint8 (gripper left)
     [-0.04,    0.0],      # joint9 (gripper right)
 ])
@@ -500,7 +502,7 @@ with torch.inference_mode():
         if captured_img is not None:
             # --- Get current joint state ---
             joint_states = robot.get_joint_positions()
-            print(f"Current joint states at step {t}: {joint_states}")
+            # print(f"Current joint states at step {t}: {joint_states}")
             grippers = np.array([joint_states[7]])
 
             # --- Update observation window ---
@@ -571,7 +573,7 @@ with torch.inference_mode():
                 raw_action_for_robot = np.concatenate(
                     (left_actions, np.array([left_grip]), np.array([-left_grip])), axis=0
                 )
-                print(f"Applying raw action (no scaling): {raw_action_for_robot}")
+                # print(f"Applying raw action (no scaling): {raw_action_for_robot}")
                 robot_action = ArticulationAction(joint_positions=raw_action_for_robot)
                 robot.apply_action(robot_action)
 

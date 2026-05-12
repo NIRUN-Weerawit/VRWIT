@@ -7,6 +7,7 @@ import pickle
 import fnmatch
 import cv2
 from time import time
+from einops import rearrange
 from torch.utils.data import TensorDataset, DataLoader
 import torchvision.transforms as transforms
 import torchvision.transforms.functional as tvf
@@ -658,4 +659,96 @@ def set_seed(seed):
     torch.manual_seed(seed)
     np.random.seed(seed)
     random.seed(seed)
+
+def slerp(q0, q1, t):
+    """
+    Performs Spherical Linear Interpolation (SLERP) between two quaternions.
+
+    Args:
+        q0 (torch.Tensor): The starting quaternion (shape [4]).
+        q1 (torch.Tensor): The ending quaternion (shape [4]).
+        t (float): The interpolation factor, between 0.0 and 1.0.
+
+    Returns:
+        torch.Tensor: The interpolated quaternion.
+    """
+    
+    q0 = torch.from_numpy(q0).float()
+    q1 = torch.from_numpy(q1).float()
+    assert q0.shape == q1.shape 
+    # Calculate the dot product between the two quaternions
+    dot = torch.dot(q0, q1)
+
+    # If the dot product is negative, the quaternions are more than 90 degrees
+    # apart. To take the shorter path, we need to flip one of them.
+    if dot < 0.0:
+        q1 = -q1
+        dot = -dot
+
+    # Set a threshold for when to fall back to linear interpolation (LERP)
+    # to avoid division by zero and numerical instability near dot == 1.
+    DOT_THRESHOLD = 0.9995
+    if dot > DOT_THRESHOLD:
+        # If the quaternions are very close, linearly interpolate and normalize.
+        result = q0 + t * (q1 - q0)
+        return result / torch.linalg.norm(result)
+
+    # Standard SLERP formula
+    theta_0 = torch.acos(dot)        # Angle between quaternions
+    sin_theta_0 = torch.sin(theta_0) # Sine of the angle
+
+    theta = theta_0 * t              # Angle for the interpolated quaternion
+    sin_theta = torch.sin(theta)     # Sine of the new angle
+
+    s0 = torch.cos(theta) - dot * sin_theta / sin_theta_0
+    s1 = sin_theta / sin_theta_0
+
+    return (s0 * q0) + (s1 * q1)
+
+def get_observations(dof_states):
+    joint_positions     = dof_states[:, 0].view(1, 8)
+    # print(f"joint_positions = {joint_positions}")
+    return joint_positions.tolist()
+
+def get_image(ts, camera_names, stats):
+    # print(f"stats = {stats}")
+    curr_images = []
+    depth_images = []
+    for cam in range(len(camera_names)):
+        curr_image  = rearrange(ts[cam], 'h w c -> c h w')
+        # print(f" img shape {curr_image.shape}")
+        curr_images.append(curr_image[:3])
+        depth_images.append(curr_image[3])
+    
+    curr_image  = np.stack(curr_images,     axis=0)
+    depth_image = np.stack(depth_images,    axis=0)
+    # print(f"curr img shape {curr_image.shape}")
+    for cam in range(len(camera_names)):
+        depth_image[cam] = (depth_image[cam] - stats[f"depth_mean_cam{cam+1}"]) / stats[f"depth_std_cam{cam+1}"]
+    
+    curr_image = torch.from_numpy(curr_image / 255.0).float().cuda().unsqueeze(0)    
+    depth_image = torch.from_numpy(depth_image).float().cuda().unsqueeze(1).unsqueeze(0)
+    # print(f"depth img shape {depth_image.shape}")
+    
+    
+    curr_image = torch.concatenate([curr_image, depth_image], axis = 2)
+    # print(f"final img shape {curr_image.shape}")
+
+    return curr_image
+
+def create_video_writer(video_name: str, frequency: int, width: int, height: int): 
+    """
+    Initializes a video writer that encodes frames to AVI format using the XVID codec.
+    
+    Args:
+        video_name (str): Base name for the output video file (without extension).
+        frequency (int): Frame rate (FPS) for the output video.
+        width (int): Width of the video frames in pixels.
+        height (int): Height of the video frames in pixels.
+    
+    Returns:
+        cv2.VideoWriter: A VideoWriter object that can write frames to disk.
+                         Output file will be saved as '{video_name}.avi'
+    """
+    return cv2.VideoWriter(f'{video_name}.avi', cv2.VideoWriter_fourcc(*'XVID'), frequency, (width, height))
 

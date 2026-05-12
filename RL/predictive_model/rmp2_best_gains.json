@@ -1,0 +1,10 @@
+{
+  "target_attractor": {
+    "accel_p_gain": 20,
+    "accel_d_gain": 10
+  },
+  "orientation_attractor": {
+    "accel_p_gain": 10,
+    "accel_d_gain": 5
+  }
+}

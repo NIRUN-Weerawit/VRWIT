@@ -22,7 +22,7 @@ import torchvision.models
 from torch import nn
 from torch.utils.tensorboard import SummaryWriter
 
-from utils import pack_sequence_dim
+from scripts.utils import pack_sequence_dim
 
 
 @gin.configurable

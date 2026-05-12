@@ -1,0 +1,43 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual env
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# Wandb
+wandb/
+
+# Logs
+logs/
+logs_*/
+*.log
+
+# Checkpoints
+checkpoint_*/
+
+# Datasets / generated
+*.csv
+*.pkl
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Embedded repos
+RL/LoRCoN-LO/
+
+# Trained models (too large for git)
+RL/RL_TrainedModels/
+
+# Backup files
+*.bak
+*.bak2
+*.old
