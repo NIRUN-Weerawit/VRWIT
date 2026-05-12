@@ -24,6 +24,35 @@ from torch.utils.tensorboard import SummaryWriter
 
 from utils import pack_sequence_dim
 
+def gin_operative_str_to_dict(operative_str):
+    cfg = {}
+    for raw_line in operative_str.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith('#'):
+            continue
+        # Expect "Some.Name.param = value"
+        if '=' not in line:
+            continue
+        left, right = line.split('=', 1)
+        key = left.strip()
+        val_str = right.strip()
+
+        # remove inline comments
+        if '#' in val_str:
+            val_str = val_str.split('#', 1)[0].strip()
+
+        # try literal eval for basic literals (numbers, lists, dicts, strings, booleans)
+        try:
+            value = ast.literal_eval(val_str)
+        except Exception:
+            # fallback: strip surrounding quotes if present, else keep raw string
+            if (val_str.startswith('"') and val_str.endswith('"')) or \
+               (val_str.startswith("'") and val_str.endswith("'")):
+                value = val_str[1:-1]
+            else:
+                value = val_str
+        cfg[key] = value
+    return cfg
 
 @gin.configurable
 class SegmentationLoss(nn.Module):
@@ -138,18 +167,51 @@ class RgbLoss(nn.Module):
     Returns:
         loss: loss for RGB
     '''
-    def __init__(self):
+    def __init__(self, use_background_weighting: bool = False, 
+                 background_image_path: str = None,
+                 alpha: float = 1.0):
         super().__init__()
         self.perceptual_loss = PerceptualLoss()
         self.l1_loss = F.l1_loss
 
+        self.use_background_weighting = use_background_weighting
+        self.alpha = alpha
+        self.background_image = None
+        
+        if self.use_background_weighting and background_image_path:
+            # Load empty environment image
+            self.background_image = torch.load(background_image_path)
+            # Register as buffer so it moves to correct device with model
+            self.register_buffer('background', self.background_image)
+        
     def forward(self, prediction: torch.Tensor,
                 target: torch.Tensor) -> torch.Tensor:
-        assert len(prediction.shape) == 5, 'Prediction must be a 5D tensor'
+        assert len(prediction.shape) == 4, f'Prediction must be a 4D tensor. current shape = {prediction.shape} '
         l1_loss = self.l1_loss(prediction, target, reduction='none')
+        
+        if self.use_background_weighting and self.background_image is not None:
+            # Compute saliency map: D = |target - background|
+            # background shape: (3, h, w), expand to match target
+            bg = self.background.unsqueeze(0).unsqueeze(0)  # (1, 1, 3, h, w)
+            # D = torch.abs(target - bg)  # (b, s, 3, h, w)
+            D = torch.pow(target - bg, 2)  # (b, s, 3, h, w)
+            print(f"max/min value of D: {D.max()}/{D.min()}")
+            
+            # Normalize D to [0, 1]
+            D_max = D.amax(dim=(2, 3, 4), keepdim=True) + 1e-8
+            D_normalized = D / D_max
+            
+            # Apply adaptive weighting: (1 + alpha * D)
+            weights = 1.0 + self.alpha * D_normalized
+            
+            # Apply weights to loss
+            l1_loss = l1_loss * weights
+        
+        
         l1_loss = torch.sum(l1_loss, dim=-3, keepdims=True).mean()
-        perceptual_loss = self.perceptual_loss(pack_sequence_dim(prediction),
-                                               pack_sequence_dim(target))
+        # perceptual_loss = self.perceptual_loss(pack_sequence_dim(prediction),
+                                            #    pack_sequence_dim(target))
+        perceptual_loss = self.perceptual_loss(prediction,target)
         return l1_loss + perceptual_loss
 
 
@@ -337,6 +399,7 @@ class XMobilityLoss(nn.Module):
                  enable_rgb_stylegan: bool,
                  enable_rgb_diffusion: bool,
                  enable_policy_diffusion: bool,
+                 num_cam: int,
                  is_gwm_pretrain: bool = False):
         super().__init__()
         self.action_weight = action_weight
@@ -350,6 +413,7 @@ class XMobilityLoss(nn.Module):
         self.enable_rgb_diffusion = enable_rgb_diffusion
         self.enable_policy_diffusion = enable_policy_diffusion
         self.is_gwm_pretrain = is_gwm_pretrain
+        self.num_cam = num_cam
 
         if not self.is_gwm_pretrain:
             if self.enable_policy_diffusion:
@@ -367,9 +431,13 @@ class XMobilityLoss(nn.Module):
             self.diffusion_loss = DiffusionLoss()
 
         self.depth_loss = DepthLoss()
-        self.writer = SummaryWriter('logs_rgb_1')
+        self.writer = SummaryWriter('logs_rgb_5')
         self.step = 0
-        
+        gin_path    = "configs/config.gin"
+        oper_str = gin.operative_config_str()
+        gin_dict = gin_operative_str_to_dict(oper_str)
+        with open(gin_path, "w") as f:
+            f.write(oper_str)
 
     def forward(self, output: Dict, batch: Dict) -> Dict:
         
@@ -409,7 +477,8 @@ class XMobilityLoss(nn.Module):
         # StyleGan RGB regression loss.
         if self.enable_rgb_stylegan:
             for downsampling_factor in [1, 2, 4]:
-                for cam in range(2):
+                rgb_loss_total = 0
+                for cam in range(self.num_cam):
                     if f"rgb_cam_{cam+1}_{downsampling_factor}" not in output:
                         continue
                     discount = 1 / downsampling_factor
@@ -418,18 +487,22 @@ class XMobilityLoss(nn.Module):
                         target=batch[f"rgb_cam_{cam+1}_label_{downsampling_factor}"],
                     )
                     if self.step % 100 == 0:
-                        pred = output[f"rgb_cam_{cam+1}_{downsampling_factor}"][0, 0]  # First batch, first timestep
-                        target = batch[f"rgb_cam_{cam+1}_label_{downsampling_factor}"][0, 0]
-                        mean = torch.tensor([0.485,0.456,0.406], device=pred.device).view(1,3,1,1)
-                        std = torch.tensor([0.229,0.224,0.225], device=pred.device).view(1,3,1,1) 
+                        pred = output[f"rgb_cam_{cam+1}_{downsampling_factor}"][0]  # First batch, first timestep
+                        # print(f"shape of prediction: {pred.shape} ")
+                        target = batch[f"rgb_cam_{cam+1}_label_{downsampling_factor}"][0]
+                        # mean = torch.tensor([0.485,0.456,0.406], device=pred.device).view(1,3,1,1)
+                        # std = torch.tensor([0.229,0.224,0.225], device=pred.device).view(1,3,1,1) 
                         # print(f"pred.shape = {pred.shape}   |   target.shape={target.shape}")
                         # print(f"rgb_{downsampling_factor} : min= {pred.min()}, max= {pred.max()}   |   rgb_label_{downsampling_factor} : min= {target.min()}, max= {target.max()}  ")
                         self.writer.add_images(f'rgb_cam_{cam+1}_{downsampling_factor}/prediction', pred.unsqueeze(0), self.step)
                         # self.writer.add_images(f'rgb_{downsampling_factor}/prediction', torch.clamp(pred.unsqueeze(0)*std+mean,0,1), self.step)
                         self.writer.add_images(f'rgb_cam_{cam+1}_{downsampling_factor}/target',  target.unsqueeze(0), self.step)
-                        
-                    losses[
-                        f"rgb_cam_{cam+1}_{downsampling_factor}"] = discount * self.rgb_weight * rgb_loss
+                    
+                    rgb_loss_total += rgb_loss  
+                    # losses[
+                    #     f"rgb_cam_{cam+1}_{downsampling_factor}"] = discount * self.rgb_weight * rgb_loss
+                losses[
+                    f"rgb_{downsampling_factor}"] = discount * self.rgb_weight * rgb_loss_total
 
         # Diffusion RGB loss.
         if self.enable_rgb_diffusion:

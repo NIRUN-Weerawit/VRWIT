@@ -59,8 +59,8 @@ def video_to_frame(video_path):
 
 if __name__ == "__main__":
     # video_path = "color_output.avi"  # Replace with your video file path
-    video_path = "success/color_1_env_0_ep_1.avi"  # Replace with your video file path
-    output_dir = "color_1_env_0_ep_1"
+    video_path = "/mnt/bigdata/00_students/wee_ucl/VRWIT_1/output/cosmos2-helios/generated_episode_41_cam1_rgb.mp4"  # Replace with your video file path
+    output_dir = "/mnt/bigdata/00_students/wee_ucl/VRWIT_1/output/generated"
     # video_to_frame(video_path)
     video_to_frames(video_path, output_dir)
     

@@ -198,10 +198,13 @@ class StyleGanDecoder(nn.Module):
 
     def forward(self, w: torch.Tensor) -> Dict:
         batch_size, num_cam, hidden_dim = w.shape
-        # print("#####Shape of w (hs_image):", w.shape)
+        # print("# ------ Shape of w (hs_image):", w.shape)
+        # torch.Size([10, 2, 512])
         output = {}
         for cam in range(num_cam):
             w_flat = w[:, cam]
+            # print("# ------ Shape of w_flat:", w_flat.shape)
+            # torch.Size([10, 512])
             
             # w_flat = w.reshape(batch_size * num_cam,hidden_dim)
             
@@ -219,11 +222,15 @@ class StyleGanDecoder(nn.Module):
             output_2 = self.head_2(x, cam)
             x = self.conv3(x, w_flat)
             output_1 = self.head_1(x, cam)
+            
             # reshape outputs back to [batch, num_cam, ...]
-            def unflatten(d):
-                # for k, v in d.items():
-                    # print(f"{k} : {v.shape}")
-                return {k: v.reshape(batch_size, 1, *v.shape[1:]) for k, v in d.items()}
-            # output = {**output_4, **output_2, **output_1}
-            output =  {**output, **unflatten(output_4), **unflatten(output_2), **unflatten(output_1)}
+            # shape of outputs before unflatten: torch.Size([10, 3, 480, 640]), torch.Size([10, 3, 240, 320]), torch.Size([10, 3, 120, 160])
+            # print(f"shape of outputs before unflatten: {list(output_1.values())[0].shape}, {list(output_2.values())[0].shape}, {list(output_4.values())[0].shape}")
+            # def unflatten(d):
+            #     # for k, v in d.items():
+            #         # print(f"{k} : {v.shape}")
+            #     return {k: v.reshape(batch_size, 1, *v.shape[1:]) for k, v in d.items()}
+                        # print(f"shape of outputs before unflatten: {list(output_1.values())[0].shape}, {list(output_2.values())[0].shape}, {list(output_4.values())[0].shape}")
+            output = {**output, **output_4, **output_2, **output_1}
+            # output =  {**output, **unflatten(output_4), **unflatten(output_2), **unflatten(output_1)}
         return output

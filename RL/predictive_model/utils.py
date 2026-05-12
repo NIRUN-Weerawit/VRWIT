@@ -155,9 +155,9 @@ def compose_rgb_labels(batch):
     # print("img shape: ", img.shape)
     for cam in range(img.shape[1]):
         cam_img = img[:, cam]
-        cam_img = cam_img.unsqueeze(1)
+        # cam_img = cam_img.unsqueeze(1)
         output[f'rgb_cam_{cam+1}_label_1'] = cam_img
-        assert cam_img.ndim == 5 , f"shape of cam_{cam+1}_img is {cam_img.shape}"
+        assert cam_img.ndim == 4 , f"shape of cam_{cam+1}_img is {cam_img.shape}"
     
     # output['rgb__label_1'] = img
     h, w = img.shape[-2:]
@@ -314,8 +314,8 @@ class EpisodicDataset(torch.utils.data.Dataset):
             # all_cam_depths  = (all_cam_depths - depth_mean) / depth_std     #normalize the depth information each camera the same way
             
             # construct observations
-            image_data  = torch.from_numpy(all_cam_images)
-            depth_data  = torch.from_numpy(all_cam_depths).unsqueeze(-1)
+            image_data  = torch.from_numpy(all_cam_images.copy())
+            depth_data  = torch.from_numpy(all_cam_depths.copy()).unsqueeze(-1)
             obs_data   = torch.from_numpy(obs).float()
             action_data = torch.from_numpy(padded_action).float()
             is_pad      = torch.from_numpy(is_pad).bool()

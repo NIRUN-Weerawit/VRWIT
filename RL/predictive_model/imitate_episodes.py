@@ -25,7 +25,7 @@ from policy import ACTPolicy, CNNMLPPolicy, DiffusionPolicy
 
 from detr.models.latent_model import Latent_Model_Transformer
 import gin
-
+import ast
 
 
 # from sim_env import BOX_POSE
@@ -39,6 +39,7 @@ def get_auto_index(dataset_dir):
         if not os.path.isfile(os.path.join(dataset_dir, f'qpos_{i}.npy')):
             return i
     raise Exception(f"Error getting auto index, or more than {max_idx} episodes")
+
 
 def main(args):
     set_seed(1)
@@ -185,7 +186,14 @@ def main(args):
 
     best_ckpt_info = train_bc(train_dataloader, val_dataloader, config)
     best_step, min_val_loss, best_state_dict = best_ckpt_info
-
+    
+    gin_path = "config_1.gin"
+    # wandb.config.update(gin_dict, allow_val_change=True)
+    # with open(gin_path, "r") as f:
+    #     f.readline()
+    wandb.save(gin_path)
+        
+    # wandb.save(f"configs/{config['ckpt_dir']}_config.gin")
     # save best checkpoint
     ckpt_path = os.path.join(ckpt_dir, f'policy_best.ckpt')
     torch.save(best_state_dict, ckpt_path)
@@ -367,7 +375,7 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=3):
                 time3 = time.time()
                 if config['policy_class'] == "ACT":
                     if t % query_frequency == 0:
-                        all_actions = policy(qpos, curr_image)
+                        all_actions, rgb_prediction = policy(qpos, curr_image)
                         # print(f"all_actions size= {all_actions.shape}, query fre. = {query_frequency}")
                         # print(f"all_actions = {all_actions}")
                     if temporal_agg:
@@ -597,7 +605,7 @@ if __name__ == '__main__':
     parser.add_argument('--lr',                 action='store', type=float, required=True,                      help='lr')
     parser.add_argument('--load_pretrain',      action='store_true',                            default=False)
     parser.add_argument('--eval_every',         action='store', type=int,   required=False,     default=120000, help='eval_every', )
-    parser.add_argument('--validate_every',     action='store', type=int,   required=False,     default=2500,   help='validate_every', )
+    parser.add_argument('--validate_every',     action='store', type=int,   required=False,     default=1000,   help='validate_every', )
     parser.add_argument('--save_every',         action='store', type=int,   required=False,     default=5000,   help='save_every', )
     parser.add_argument('--resume_ckpt_path',   action='store', type=str,   required=False,                     help='resume_ckpt_path', )
     parser.add_argument('--skip_mirrored_data', action='store_true')                      ,     
@@ -609,7 +617,7 @@ if __name__ == '__main__':
 
     # for ACT
     parser.add_argument('--kl_weight',          action='store', type=int,   required=False,     default=10,     help='KL Weight',       )
-    parser.add_argument('--chunk_size',         action='store', type=int,   required=False,     default= 5,     help='chunk_size',      )
+    parser.add_argument('--chunk_size',         action='store', type=int,   required=False,     default=25,     help='chunk_size',      )
     parser.add_argument('--hidden_dim',         action='store', type=int,   required=False,     default=512,    help='hidden_dim',      )
     parser.add_argument('--dim_feedforward',    action='store', type=int,   required=False,     default=2048,   help='dim_feedforward', )
     parser.add_argument('--temporal_agg',       action='store_true')
@@ -618,9 +626,11 @@ if __name__ == '__main__':
     parser.add_argument('--vq_dim',             action='store', type=int,   help='vq_dim')
     parser.add_argument('--no_encoder',         action='store_true')
     
-    gin.parse_config_file("configs/base_train_config.gin", skip_unknown=True)
     
-    
+    cfg_path = "configs/base_train_config.gin"
+    gin.parse_config_file(cfg_path, skip_unknown=True)
+
+
     main(vars(parser.parse_args()))
     
     
