@@ -46,9 +46,10 @@ class DETRVAE(nn.Module):
         """
         super().__init__()
         self.num_action_queries = num_queries
-        self.num_image_queries  = 1  # 2 cameras x 3 future frames
+        self.num_image_queries  = 2
+        self.num_total_queries  = self.num_action_queries + self.num_image_queries
         self.action_queries = slice(0, self.num_action_queries)
-        self.image_queries = slice(self.num_action_queries, self.num_action_queries + self.num_image_queries)
+        self.image_queries = slice(self.num_action_queries, self.num_total_queries)
         self.camera_names = camera_names
         self.transformer = transformer
         self.encoder = encoder
@@ -57,7 +58,7 @@ class DETRVAE(nn.Module):
         hidden_dim = transformer.d_model
         self.action_head = nn.Linear(hidden_dim, action_dim)
         self.is_pad_head = nn.Linear(hidden_dim, 1)
-        self.query_embed = nn.Embedding(self.num_action_queries + self.num_image_queries, hidden_dim)
+        self.query_embed = nn.Embedding(self.num_total_queries, hidden_dim)
         if backbones is not None:
             self.input_proj = nn.Conv2d(backbones[0].num_channels, hidden_dim, kernel_size=1)
             # print(f"backbone body = {backbones[0].body}")
